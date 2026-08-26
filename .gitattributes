@@ -1,0 +1,2 @@
+# Preserve Windows launcher scripts exactly as shipped.
+*.bat -text

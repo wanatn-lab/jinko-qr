@@ -16,4 +16,6 @@ Full source backup for the Jinko QR ordering and iMin printing system.
 
 APK, ZIP, database backups, environment files, and credentials are intentionally excluded from this public source repository. The iMin SDK binaries are also excluded by the mobile project's `.gitignore`; run `JinkoIminPrintBridgeDriveUpdate/scripts/setup-imin-sdk.sh` to restore them from iMin's official SDK package.
 
+Public defaults use documentation placeholders for the API URL, printer IP, and shop phone. Configure the real values after cloning.
+
 See each project's README for installation and deployment details.

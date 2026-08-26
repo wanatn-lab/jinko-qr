@@ -1,0 +1,7 @@
+{
+  "printers": [],
+  "apiBase": "https://your-project.vercel.app",
+  "paperWidthMm": 80,
+  "pollIntervalMs": 4000,
+  "shopName": "ร้านของคุณ"
+}

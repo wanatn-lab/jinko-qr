@@ -1,0 +1,36 @@
+# Dependencies and build output
+**/node_modules/
+**/build/
+**/.gradle/
+**/Pods/
+**/vendor/bundle/
+
+# Local configuration and credentials
+**/.env
+**/.env.*
+!**/.env.example
+**/*.pem
+**/*.key
+**/*.p12
+**/*.jks
+**/service-account*.json
+**/serviceAccount*.json
+**/config.local.json
+
+# Backup and release artifacts are kept outside Git
+apk/
+**/*.apk
+**/*.aab
+**/*.ipa
+**/*.zip
+**/*.sql
+**/*.sqlite
+**/*.sqlite3
+**/*.db
+
+# Local/editor files
+.DS_Store
+Thumbs.db
+**/.idea/
+**/.vscode/
+

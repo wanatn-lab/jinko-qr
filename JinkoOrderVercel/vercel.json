@@ -1,0 +1,11 @@
+{
+  "redirects": [
+    { "source": "/", "destination": "/admin", "permanent": false }
+  ],
+  "rewrites": [
+    { "source": "/admin", "destination": "/admin.html" },
+    { "source": "/order", "destination": "/order.html" },
+    { "source": "/table-status", "destination": "/table-status.html" },
+    { "source": "/counter-print", "destination": "/counter-print.html" }
+  ]
+}

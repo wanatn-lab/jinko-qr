@@ -1,0 +1,15 @@
+{
+  "name": "kitchen-print-agent",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "รับออเดอร์จากระบบ QR สั่งอาหาร แล้วพิมพ์ใบสั่งออกเครื่องพิมพ์ครัวผ่านเครือข่าย (LAN/WiFi)",
+  "main": "index.mjs",
+  "scripts": {
+    "start": "node index.mjs",
+    "test-print": "node index.mjs --test"
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "^0.1.100"
+  }
+}
