@@ -1,4 +1,5 @@
 import { redis } from "./_redis.js";
+import { requireAdmin } from "./_auth.js";
 
 // Aggregates recent orders per table for the "สถานะโต๊ะ" dashboard, and lets
 // staff advance a menu item's kitchen status (cooking -> ready -> served) or
@@ -102,6 +103,7 @@ function receiptForTable(orders, clearMap, table, settings, now) {
         name: String(item.name || "รายการ"),
         qty,
         price,
+        note: typeof item.note === "string" ? item.note : "",
         lineTotal: price * qty,
       });
     }
@@ -166,6 +168,7 @@ export default async function handler(req, res) {
           price: item.price,
           qty: item.qty,
           category: item.category || "",
+          note: typeof item.note === "string" ? item.note : "",
           status: item.kitchenStatus || "cooking",
         });
       });
@@ -176,6 +179,7 @@ export default async function handler(req, res) {
   }
 
   if (req.method === "POST") {
+    if (!(await requireAdmin(req, res))) return;
     const body = req.body || {};
 
     // Checkout is deliberately a single server-side operation.  When staff selects

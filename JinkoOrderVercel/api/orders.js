@@ -1,4 +1,5 @@
 import { redis } from "./_redis.js";
+import { requireAdmin } from "./_auth.js";
 
 function genId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -20,6 +21,7 @@ export default async function handler(req, res) {
 
     // Mark an existing order done (used once the kitchen has served it).
     if (body.action === "done" && body.id) {
+      if (!(await requireAdmin(req, res))) return;
       const updated = orders.map((o) => (o.id === body.id ? { ...o, status: "done" } : o));
       await redis.set("orders", updated.slice(-1000));
       return res.status(200).json({ ok: true });
@@ -33,13 +35,14 @@ export default async function handler(req, res) {
     // for any caller that doesn't look at kitchenStatus.
     const items = body.items.map((it) => ({
       ...it,
+      note: typeof it.note === "string" ? it.note.trim().slice(0, 300) : "",
       kitchenStatus: it.kitchenStatus || "cooking",
     }));
     const order = {
       id: genId(),
       table: body.table,
       items,
-      note: body.note || "",
+      note: typeof body.note === "string" ? body.note.trim().slice(0, 300) : "",
       status: "new",
       createdAt: new Date().toISOString(),
     };

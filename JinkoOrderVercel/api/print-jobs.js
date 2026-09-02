@@ -1,7 +1,7 @@
 import { redis } from "./_redis.js";
 
 // A receipt must survive the browser closing and must not be printed by two
-// Bridge processes at once.  A short server-side lease, plus the bridge's own
+// Bridge processes at once. A short server-side lease, plus the bridge's own
 // local print history, gives us both durability and protection during the
 // foreground/background hand-off on iMin.
 const CLAIM_TTL_MS = 2 * 60 * 1000;

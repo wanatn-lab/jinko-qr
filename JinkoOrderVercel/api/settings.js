@@ -1,7 +1,35 @@
 import { redis } from "./_redis.js";
+import { requireAdmin } from "./_auth.js";
 
-// Seed — matches what was already live before this migration.
-const SEED_SETTINGS = { tableCount: 20, shopName: "จิ๊นโค", paperWidthMm: 80, printers: [] };
+// Defaults match the original receipt and kitchen print layouts. Existing
+// stored settings still take priority over these values.
+const SEED_SETTINGS = {
+  tableCount: 20,
+  shopName: "จิ๊นโค",
+  paperWidthMm: 80,
+  printers: [],
+  receipt: {
+    logoUrl: "",
+    shopPhone: "085-529-8799",
+    shopAddress: "",
+    taxId: "",
+    title: "ใบเสร็จรับเงิน",
+    thanksText: "ขอบคุณที่แวะมาจ้า โอกาสหน้าเชิญใหม่นะ",
+    apologyText: "ผิดพลาดยังไงต้องขออภัย พวกเรามือใหม่ครับ",
+    showBillNo: true,
+    showTime: true,
+    showTable: true,
+    showQr: false,
+    qrUrl: "",
+  },
+  kitchen: {
+    fontSize: "md",
+    showPrice: false,
+    showNote: true,
+    showTime: true,
+    groupByCategory: true,
+  },
+};
 
 export default async function handler(req, res) {
   if (req.method === "GET") {
@@ -14,6 +42,7 @@ export default async function handler(req, res) {
   }
 
   if (req.method === "POST") {
+    if (!(await requireAdmin(req, res))) return;
     const body = req.body || {};
     const current = (await redis.get("settings")) || SEED_SETTINGS;
     const merged = { ...current, ...body };

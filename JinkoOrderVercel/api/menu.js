@@ -1,4 +1,5 @@
 import { redis } from "./_redis.js";
+import { requireAdmin } from "./_auth.js";
 
 // Seed data — matches what was already live on the site before this migration,
 // so the very first request doesn't show an empty menu.
@@ -19,6 +20,7 @@ export default async function handler(req, res) {
   }
 
   if (req.method === "POST") {
+    if (!(await requireAdmin(req, res))) return;
     const menu = req.body;
     if (!Array.isArray(menu)) {
       return res.status(400).json({ ok: false, error: "expected an array of menu items" });

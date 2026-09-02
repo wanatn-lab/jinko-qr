@@ -46,8 +46,8 @@
       <span>รวมทั้งหมด</span>
       <span id="reviewTotal">฿0</span>
     </div>
-    <div class="sheet-note">มีอะไรอยากบอกครัวไหม (ไม่ใส่ผัก, เผ็ดน้อย ฯลฯ) — ไม่บังคับ</div>
-    <input id="orderNote" type="text" placeholder="พิมพ์ตรงนี้ได้เลย...">
+    <div class="sheet-note">หมายเหตุรวมทั้งออเดอร์ (ถ้ามี) — ไม่บังคับ</div>
+    <input id="orderNote" type="text" maxlength="300" placeholder="เช่น รีบหน่อย หรือ เสิร์ฟพร้อมกัน">
     <button id="submitBtn" class="confirm-cta" onclick="submitOrder()">ส่งออเดอร์เข้าครัว 🍳</button>
   </div>
 </div>
@@ -85,6 +85,7 @@ document.getElementById('welcomeLine').textContent = TABLE
 
 let MENU = [];
 let cart = {}; // id -> qty
+let itemNotes = {}; // id -> หมายเหตุของเมนูนั้นในออเดอร์ปัจจุบัน
 let activeCat = null; // null = ทั้งหมด
 let searchQuery = '';
 
@@ -136,11 +137,6 @@ function matchesSearch(item, q) {
   return hay.includes(q.toLowerCase());
 }
 
-function isMustTry(item) {
-  return Boolean(item) && (item.mustTry === true || item.mustTry === 'true' ||
-    item.must_try === true || item.must_try === 'true');
-}
-
 function renderMenu() {
   const root = document.getElementById('menuRoot');
   if (!MENU.length) {
@@ -178,7 +174,6 @@ function renderMenu() {
 
 function renderCard(item) {
   const soldOut = item.available === false;
-  const mustTry = isMustTry(item);
   const qty = cart[item.id] || 0;
   const tapAdd = soldOut ? '' : `onclick="changeQty('${item.id}', 1)"`;
   const control = soldOut ? '' : (qty > 0
@@ -189,10 +184,9 @@ function renderCard(item) {
        </div>`
     : `<button class="add-fab" onclick="event.stopPropagation(); changeQty('${item.id}', 1)">+</button>`);
   return `
-    <div class="menu-card2 ${soldOut ? 'sold-out' : ''} ${mustTry ? 'must-try' : ''}">
+    <div class="menu-card2 ${soldOut ? 'sold-out' : ''}">
       <div class="thumb-wrap ${soldOut ? '' : 'tap-add'}" ${tapAdd}>
-        <img src="${escAttr(item.image)}" alt="${escAttr(item.name)}" loading="lazy" decoding="async">
-        ${mustTry ? '<span class="badge-must-try" aria-label="เมนูต้องลอง">✨ ต้องลอง</span>' : ''}
+        <img src="${escAttr(item.image)}" alt="">
         ${soldOut ? '<span class="badge-soldout">ของหมดวันนี้</span>' : (item.popular ? '<span class="badge-popular">ยอดนิยม 🔥</span>' : '')}
         ${control}
       </div>
@@ -208,7 +202,10 @@ function renderCard(item) {
 
 function changeQty(id, delta) {
   const next = (cart[id] || 0) + delta;
-  if (next <= 0) delete cart[id];
+  if (next <= 0) {
+    delete cart[id];
+    delete itemNotes[id];
+  }
   else cart[id] = next;
   renderMenu();
   updateCartBar();
@@ -217,8 +214,21 @@ function changeQty(id, delta) {
 function cartItems() {
   return Object.entries(cart).map(([id, qty]) => {
     const item = MENU.find(i => i.id === id);
-    return item ? { id, name: item.name, price: item.price, category: item.category || '', qty } : null;
+    return item ? {
+      id,
+      name: item.name,
+      price: item.price,
+      category: item.category || '',
+      qty,
+      note: String(itemNotes[id] || '').trim()
+    } : null;
   }).filter(Boolean);
+}
+
+function setItemNote(id, note) {
+  const value = String(note || '').slice(0, 300);
+  if (value.trim()) itemNotes[id] = value;
+  else delete itemNotes[id];
 }
 
 function cartCountTotal() {
@@ -266,6 +276,11 @@ function renderReview() {
       <div style="flex:1">
         <div class="rname">${escAttr(it.name)}</div>
         <div class="rprice">฿${it.price} / ชิ้น</div>
+        <input class="item-note-input" type="text" maxlength="300"
+          aria-label="หมายเหตุสำหรับ ${escAttr(it.name)}"
+          placeholder="หมายเหตุสำหรับเมนูนี้ เช่น ไม่ใส่ผัก"
+          value="${escAttr(it.note)}"
+          oninput="setItemNote('${it.id}', this.value)">
       </div>
       <div class="rstepper">
         <button onclick="changeQty('${it.id}', -1); renderReview();">−</button>
@@ -296,6 +311,7 @@ async function submitOrder() {
     });
     if (!res.ok) throw new Error('failed');
     cart = {};
+    itemNotes = {};
     document.getElementById('orderNote').value = '';
     renderMenu();
     updateCartBar();
@@ -341,9 +357,9 @@ async function openHistory() {
         <span class="history-status ${o.status === 'done' ? 'done' : ''}">${o.status === 'done' ? 'เสิร์ฟแล้ว' : 'กำลังทำ'}</span>
       </div>
       <ul class="history-items">
-        ${o.items.map(it => `<li><span>${escAttr(it.name)} x${it.qty}</span><span>฿${it.price * it.qty}</span></li>`).join('')}
+        ${o.items.map(it => `<li><div><div>${escAttr(it.name)} x${it.qty}</div>${it.note ? `<div class="history-item-note">📝 ${escAttr(it.note)}</div>` : ''}</div><span>฿${it.price * it.qty}</span></li>`).join('')}
       </ul>
-      ${o.note ? `<div class="history-note">📝 ${escAttr(o.note)}</div>` : ''}
+      ${o.note ? `<div class="history-note">📝 หมายเหตุรวม: ${escAttr(o.note)}</div>` : ''}
       <div class="history-total">รวม ฿${o.items.reduce((s, it) => s + it.price * it.qty, 0)}</div>
     </div>
   `).join('');

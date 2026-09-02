@@ -184,6 +184,7 @@
   #panel-tablestatus .order-item .info{flex:1;}
   #panel-tablestatus .order-item .name{font-weight:600;font-size:14.5px;}
   #panel-tablestatus .order-item .price{font-size:12.5px;color:var(--ink-soft);margin-top:2px;}
+  #panel-tablestatus .order-item-note{margin-top:4px;color:#9c5b12;font-size:12px;line-height:1.4;}
   #panel-tablestatus .item-status-btn{
     font-size:11.5px;font-weight:700;border:none;border-radius:999px;
     padding:6px 11px;cursor:pointer;white-space:nowrap;font-family:'Noto Sans Thai';
@@ -386,6 +387,12 @@
   #panel-billhistory .bh-filter button{border:0;border-radius:7px;background:transparent;color:var(--bh-soft);font:700 12px 'Noto Sans Thai';padding:6px 9px;cursor:pointer;white-space:nowrap;}
   #panel-billhistory .bh-filter button:hover{color:var(--bh-primary-dark);background:#f0fdfa;}
   #panel-billhistory .bh-filter button.active{background:var(--bh-primary);color:#fff;box-shadow:0 1px 3px rgba(15,118,110,.26);}
+  #panel-billhistory .bh-day-picker{display:flex;gap:7px;overflow-x:auto;padding:12px 1px 2px;scrollbar-width:thin;scroll-snap-type:x proximity;}
+  #panel-billhistory .bh-day-button{flex:0 0 auto;min-width:82px;border:1px solid var(--bh-line);border-radius:11px;background:#fff;color:var(--bh-soft);padding:7px 10px;font:700 12px/1.35 'Noto Sans Thai';cursor:pointer;scroll-snap-align:start;}
+  #panel-billhistory .bh-day-button span{display:block;font-size:11px;font-weight:500;color:#94a3b8;}
+  #panel-billhistory .bh-day-button:hover{border-color:var(--bh-primary);color:var(--bh-primary-dark);background:#f0fdfa;}
+  #panel-billhistory .bh-day-button.active{border-color:var(--bh-primary);background:var(--bh-primary);color:#fff;box-shadow:0 2px 6px rgba(15,118,110,.2);}
+  #panel-billhistory .bh-day-button.active span{color:#d9fffb;}
   #panel-billhistory .bh-refresh{border:1px solid var(--bh-line);border-radius:10px;background:#fff;color:var(--bh-primary-dark);font:600 13px 'Noto Sans Thai';padding:8px 12px;cursor:pointer;white-space:nowrap;}
   #panel-billhistory .bh-refresh:hover{border-color:var(--bh-primary);background:#f0fdfa;}
   #panel-billhistory .bh-refresh:disabled{opacity:.55;cursor:wait;}
@@ -528,7 +535,10 @@
 <body>
 <div class="topbar">
   <h1>แอดมิน</h1>
-  <a href="/order" style="color:#fff;font-size:13px" target="_blank">ดูหน้าลูกค้า →</a>
+  <div style="display:flex;align-items:center;gap:14px">
+    <a href="/order" style="color:#fff;font-size:13px" target="_blank">ดูหน้าลูกค้า →</a>
+    <a href="/api/auth/logout" style="color:#fff;font-size:13px">ออกจากระบบ</a>
+  </div>
 </div>
 
 <div class="tabs no-print">
@@ -633,7 +643,7 @@
       <div class="row">
         <div>
           <label>IP เครื่องพิมพ์</label>
-          <input id="pfIp" type="text" placeholder="192.0.2.10">
+          <input id="pfIp" type="text" placeholder="192.168.1.50">
         </div>
         <div>
           <label>พอร์ต (ปกติ 9100)</label>
@@ -759,7 +769,7 @@
 <div class="receipt-print" id="ts-receiptPrint">
   <div class="r-head">
     <h2>จิ๊นโค</h2>
-    <p></p>
+    <p>085-529-8799</p>
   </div>
   <div class="r-dash"></div>
   <div class="r-info">
@@ -803,6 +813,7 @@
           <button type="button" class="bh-refresh" id="bh-refresh">↻ รีเฟรช</button>
         </div>
       </header>
+      <div class="bh-day-picker" id="bh-day-picker" role="group" aria-label="เลือกดูบิลแยกตามวันที่"></div>
       <div class="bh-list" id="bh-list" aria-live="polite">
         <div class="bh-empty"><strong>กำลังโหลดบิล…</strong>กรุณารอสักครู่</div>
       </div>
@@ -1881,7 +1892,8 @@ function renderPanel(){
     orderList.innerHTML = t.items.map((it,idx)=>`
       <div class="order-item" data-idx="${idx}">
         <div class="info">
-          <div class="name">${it.name} <span style="color:var(--ink-soft); font-weight:500;">×${it.qty}</span></div>
+          <div class="name">${escAttr(it.name)} <span style="color:var(--ink-soft); font-weight:500;">×${it.qty}</span></div>
+          ${it.note ? `<div class="order-item-note">หมายเหตุ: ${escAttr(it.note)}</div>` : ''}
           <div class="price">฿${fmtBaht(it.price*it.qty)}</div>
         </div>
         <button class="item-status-btn ${it.status}" data-idx="${idx}" ${!ITEM_STATUS[it.status] || !ITEM_STATUS[it.status].next ? "disabled" : ""}>${(ITEM_STATUS[it.status]||ITEM_STATUS.served).label} →</button>
@@ -2234,6 +2246,7 @@ init();
   const list = document.getElementById('bh-list');
   const refreshBtn = document.getElementById('bh-refresh');
   const filter = document.getElementById('bh-filter');
+  const dayPicker = document.getElementById('bh-day-picker');
   const modal = document.getElementById('bh-modal');
   const closeBtn = document.getElementById('bh-close');
   const reprintBtn = document.getElementById('bh-reprint');
@@ -2283,7 +2296,37 @@ init();
   }
   function bangkokDay(value){
     const date = new Date(value);
-    return Number.isNaN(date.getTime()) ? '' : bangkokDayFormat.format(date);
+    if(Number.isNaN(date.getTime())) return '';
+    const parts = bangkokDayFormat.formatToParts(date).reduce((result, part) => {
+      if(part.type !== 'literal') result[part.type] = part.value;
+      return result;
+    }, {});
+    return `${parts.year}-${parts.month}-${parts.day}`;
+  }
+  function shiftDay(dayKey, offset){
+    const [year, month, day] = String(dayKey).split('-').map(Number);
+    const shifted = new Date(Date.UTC(year, month - 1, day + offset));
+    return `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2,'0')}-${String(shifted.getUTCDate()).padStart(2,'0')}`;
+  }
+  function dayLabel(dayKey){
+    const [year, month, day] = String(dayKey).split('-').map(Number);
+    return new Date(Date.UTC(year, month - 1, day)).toLocaleDateString('th-TH', {
+      timeZone:'UTC', weekday:'short', day:'numeric', month:'short',
+    });
+  }
+  function sevenDayKeys(){
+    const today = bangkokDay(new Date());
+    return Array.from({length:7}, (_, index) => shiftDay(today, index - 6));
+  }
+  function renderDayPicker(){
+    if(!dayPicker) return;
+    const today = bangkokDay(new Date());
+    dayPicker.innerHTML = sevenDayKeys().map(dayKey => {
+      const count = bills.filter(bill => bangkokDay(billDate(bill)) === dayKey).length;
+      const active = billPeriod === dayKey;
+      const label = dayKey === today ? 'วันนี้' : dayLabel(dayKey);
+      return `<button type="button" class="bh-day-button ${active ? 'active' : ''}" data-bh-day="${dayKey}" aria-pressed="${active}">${escapeHtml(label)}<span>${count} บิล</span></button>`;
+    }).join('');
   }
   function billDate(bill){
     // A cancelled bill remains on the date it was issued, rather than moving to the day
@@ -2291,12 +2334,15 @@ init();
     return bill && (bill.settledAt || bill.createdAt);
   }
   function visibleBills(){
-    if(billPeriod !== 'today') return bills;
+    if(billPeriod === 'seven-days') return bills;
     const today = bangkokDay(new Date());
-    return bills.filter(bill => bangkokDay(billDate(bill)) === today);
+    const selectedDay = billPeriod === 'today' ? today : billPeriod;
+    return bills.filter(bill => bangkokDay(billDate(bill)) === selectedDay);
   }
   function periodLabel(){
-    return billPeriod === 'today' ? 'วันนี้' : 'ย้อนหลัง 7 วัน';
+    if(billPeriod === 'today') return 'วันนี้';
+    if(billPeriod === 'seven-days') return 'ย้อนหลัง 7 วัน';
+    return dayLabel(billPeriod);
   }
   function updateFilterUi(){
     filter.querySelectorAll('[data-bh-period]').forEach(button => {
@@ -2304,6 +2350,7 @@ init();
       button.classList.toggle('active', active);
       button.setAttribute('aria-pressed', String(active));
     });
+    renderDayPicker();
   }
   function summaryFromBills(items){
     const valid = items.filter(bill => !isCancelled(bill));
@@ -2317,7 +2364,7 @@ init();
     const summary = summaryFromBills(visibleBills());
     const validBills = Math.max(0, Number(summary.validBills) || 0);
     const cancelledBills = Math.max(0, Number(summary.cancelledBills) || 0);
-    const prefix = billPeriod === 'today' ? 'วันนี้' : '7 วัน';
+    const prefix = periodLabel();
     summaryEl.innerHTML = `<span>บิลที่มีผล${prefix} ${validBills} ใบ</span><span class="cancelled">ยกเลิก ${cancelledBills} ใบ</span>`;
   }
   function showToast(message){
@@ -2334,7 +2381,7 @@ init();
     renderSummary();
     const items = visibleBills();
     if(!items.length){
-      const title = billPeriod === 'today' ? 'ยังไม่มีบิลวันนี้' : 'ยังไม่มีบิลใน 7 วันที่ผ่านมา';
+      const title = billPeriod === 'today' ? 'ยังไม่มีบิลวันนี้' : `ยังไม่มีบิลในช่วง ${periodLabel()}`;
       const detail = billPeriod === 'today'
         ? 'เลือก “ย้อนหลัง 7 วัน” เพื่อดูบิลก่อนหน้า หรือเมื่อกดคิดเงิน บิลใหม่จะปรากฏที่นี่'
         : 'เมื่อกดคิดเงิน รายละเอียดบิลจะถูกบันทึกไว้ที่นี่โดยอัตโนมัติ';
@@ -2403,10 +2450,13 @@ init();
     }).join('') || '<div class="bh-empty" style="padding:28px 12px">ไม่มีรายละเอียดรายการ</div>';
     document.getElementById('bh-total').textContent = money(bill.total);
     document.querySelector('#panel-billhistory .bh-total').classList.toggle('is-cancelled', cancelled);
-    actions.hidden = cancelled;
-    cancelledNote.hidden = !cancelled;
+    const actionsAvailable = bill.actionsAvailable !== false;
+    actions.hidden = cancelled || !actionsAvailable;
+    cancelledNote.hidden = !cancelled && actionsAvailable;
     if(cancelled){
       cancelledNote.textContent = `ใบเสร็จนี้ถูกยกเลิกแล้วเมื่อ ${dateTime(bill.cancelledAt)} และไม่นับรวมในจำนวนบิลที่มีผล`;
+    }else if(!actionsAvailable){
+      cancelledNote.textContent = 'รายการนี้เป็นข้อมูลก่อนเปิดระบบเก็บใบเสร็จ จึงดูยอดย้อนหลังได้ แต่ยังพิมพ์ซ้ำหรือยกเลิกจากหน้านี้ไม่ได้';
     }else{
       cancelledNote.textContent = '';
       reprintBtn.disabled = false;
@@ -2480,6 +2530,13 @@ init();
     const period = button.dataset.bhPeriod;
     if(period !== 'today' && period !== 'seven-days') return;
     billPeriod = period;
+    closeModal();
+    renderBills();
+  });
+  dayPicker.addEventListener('click', event=>{
+    const button = event.target.closest('[data-bh-day]');
+    if(!button) return;
+    billPeriod = button.dataset.bhDay;
     closeModal();
     renderBills();
   });

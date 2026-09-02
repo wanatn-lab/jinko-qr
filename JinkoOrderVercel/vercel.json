@@ -3,6 +3,7 @@
     { "source": "/", "destination": "/admin", "permanent": false }
   ],
   "rewrites": [
+    { "source": "/login", "destination": "/login.html" },
     { "source": "/admin", "destination": "/admin.html" },
     { "source": "/order", "destination": "/order.html" },
     { "source": "/table-status", "destination": "/table-status.html" },

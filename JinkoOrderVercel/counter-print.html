@@ -96,9 +96,10 @@
   .oc-status.pending{background:var(--warn-bg);color:var(--warn-text);}
   .oc-status.failed{background:var(--bad-bg);color:var(--bad-text);}
   .oc-items{border-top:1px dashed var(--line);border-bottom:1px dashed var(--line);padding:10px 0;margin-bottom:10px;}
-  .oc-item{display:flex;justify-content:space-between;font-size:14.5px;padding:3px 0;}
+  .oc-item{display:flex;justify-content:space-between;gap:8px;font-size:14.5px;padding:3px 0;}
   .oc-item .n{font-weight:600;}
   .oc-item .q{color:var(--ink-soft);font-weight:600;flex-shrink:0;margin-left:8px;}
+  .oc-item-note{font-size:12px;color:var(--caramel-500);line-height:1.35;margin-top:2px;}
   .oc-note{font-size:12.5px;color:var(--caramel-500);margin-bottom:10px;}
   .oc-actions{display:flex;gap:8px;}
   .btn{
@@ -259,6 +260,7 @@ let printedIds = loadPrinted();      // Set of order id ที่พิมพ์
 let failedAttempts = {};             // order id -> จำนวนครั้งที่ลองพิมพ์แล้วไม่สำเร็จ
 let ORDERS = [];                     // ออเดอร์ล่าสุดที่ดึงมา (กรองแล้วเฉพาะที่มีรายการเครื่องดื่ม)
 let paperWidthDots = 576;            // จะอัปเดตจาก /api/settings ถ้ามี (80mm=576 / 58mm=384)
+let kitchenSettings = { showNote: true, showTime: true }; // จากแท็บ "ใบเสร็จ / ใบสั่งพิมพ์" ในแอดมิน
 let pollTimer = null;
 
 function loadSettings() {
@@ -363,6 +365,7 @@ async function loadPaperWidth() {
       settings.shopName = s.shopName;
       saveSettings();
     }
+    if (s.kitchen) kitchenSettings = { showNote: s.kitchen.showNote !== false, showTime: s.kitchen.showTime !== false };
   } catch (e) { /* ใช้ค่า default ถ้าดึงไม่ได้ */ }
 }
 
@@ -437,12 +440,15 @@ function renderQueue(prevIds, isFirstLoad) {
       <div class="oc-items">
         ${order.drinkItems.map(it => `
           <div class="oc-item">
-            <span class="n">${escHtml(it.name)}</span>
+            <div>
+              <span class="n">${escHtml(it.name)}</span>
+              ${it.note ? `<div class="oc-item-note">หมายเหตุ: ${escHtml(it.note)}</div>` : ''}
+            </div>
             <span class="q">×${it.qty}</span>
           </div>
         `).join("")}
       </div>
-      ${order.note ? `<div class="oc-note">📝 ${escHtml(order.note)}</div>` : ""}
+      ${order.note ? `<div class="oc-note">📝 หมายเหตุรวม: ${escHtml(order.note)}</div>` : ""}
       <div class="oc-actions">
         <button class="btn btn-reprint" data-id="${escAttr(order.id)}">🖨 พิมพ์ซ้ำ</button>
       </div>
@@ -508,7 +514,10 @@ function printTicket(sdk, order) {
 
   sdk.setAlignment(0); // left
   sdk.setTextSize(26);
-  sdk.printText(`โต๊ะ ${order.table}    ${fmtTime(order.createdAt)} น.\n`, 1);
+  const tableLine = kitchenSettings.showTime
+    ? `โต๊ะ ${order.table}    ${fmtTime(order.createdAt)} น.\n`
+    : `โต๊ะ ${order.table}\n`;
+  sdk.printText(tableLine, 1);
   sdk.printText("--------------------------------\n", 1);
 
   order.drinkItems.forEach(it => {
@@ -519,11 +528,16 @@ function printTicket(sdk, order) {
       [24, 24],
       W
     );
+    if (kitchenSettings.showNote && it.note) {
+      sdk.setTextSize(20);
+      sdk.printText("  หมายเหตุ: " + String(it.note) + "\n", 1);
+      sdk.setTextSize(26);
+    }
   });
 
-  if (order.note) {
+  if (kitchenSettings.showNote && order.note) {
     sdk.printText("--------------------------------\n", 1);
-    sdk.printText("หมายเหตุ: " + order.note + "\n", 1);
+    sdk.printText("หมายเหตุรวม: " + order.note + "\n", 1);
   }
 
   sdk.printText("\n", 1);
