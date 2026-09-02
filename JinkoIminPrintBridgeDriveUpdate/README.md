@@ -5,12 +5,14 @@
 | รายการ | ปลายทาง | วิธีพิมพ์ |
 | --- | --- | --- |
 | หมวด `เครื่องดื่ม` | เครื่องพิมพ์ในตัว D4 | iMin Printer SDK 1.3.1 ผ่าน USB |
-| รายการอื่นทั้งหมด | เครื่องพิมพ์ครัว | raw ESC/POS bitmap ผ่าน TCP/LAN (ตัวอย่าง `192.0.2.10:9100`) |
+| รายการอื่นทั้งหมด | เครื่องพิมพ์ครัว | raw ESC/POS bitmap ผ่าน TCP/LAN (`192.168.1.242:9100`) |
 
 แอปเรียก endpoint เดิมของระบบโดยตรง:
 
-- `GET https://your-project.vercel.app/api/orders`
-- `GET https://your-project.vercel.app/api/settings`
+- `GET https://jinko-order.vercel.app/api/orders`
+- `GET https://jinko-order.vercel.app/api/settings`
+- `GET/POST https://jinko-order.vercel.app/api/print-jobs`
+- `POST https://jinko-order.vercel.app/api/printer-status`
 
 จึงไม่ต้องติดตั้ง `iMinPrinterPlugin` และไม่พึ่ง WebSocket `ws://127.0.0.1:8081` ที่ทำให้หน้าเว็บ `counter-print` ขึ้นว่าไม่พบเครื่องพิมพ์
 
@@ -43,7 +45,7 @@ android/app/build/outputs/apk/release/app-release.apk
 
 ติดตั้งลง iMin ผ่าน ADB หรือคัดลอก APK ไปเปิดบนเครื่องก็ได้ เมื่อเข้าแอปครั้งแรก ให้ตรวจสอบ/ตั้งค่า:
 
-1. ตั้ง `IP เครื่องพิมพ์ครัว` เป็น IP ของเครื่องพิมพ์ในร้าน (ตัวอย่าง `192.0.2.10`) และพอร์ต `9100`
+1. ตั้ง `IP เครื่องพิมพ์ครัว` เป็น `192.168.1.242` และพอร์ต `9100`
 2. เครื่อง iMin และเครื่องพิมพ์ครัวอยู่ใน LAN/VLAN เดียวกัน และเครื่องพิมพ์ครัวเปิดบริการ RAW/ESC-POS ที่ TCP 9100
 3. กด `ทดสอบพิมพ์น้ำ` ก่อน — ต้องขึ้นสถานะ “พร้อมพิมพ์” และออกใบภาษาไทย
 4. กด `ทดสอบพิมพ์ครัว` — ถ้าต่อไม่ได้ แอปจะแสดงเหตุผลจาก network เช่น timeout/refused

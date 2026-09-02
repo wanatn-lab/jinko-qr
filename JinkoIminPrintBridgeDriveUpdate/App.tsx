@@ -156,10 +156,10 @@ type IminPrinterModule = {
 
 const IminPrinter = NativeModules.IminPrinter as IminPrinterModule;
 const DEFAULT_SETTINGS: Settings = {
-  apiBaseUrl: 'https://your-project.vercel.app',
+  apiBaseUrl: 'https://jinko-order.vercel.app',
   shopName: 'จิ๊นโค',
   drinkCategory: 'เครื่องดื่ม',
-  kitchenHost: '192.0.2.10',
+  kitchenHost: '192.168.1.242',
   kitchenPort: 9100,
   pollSeconds: 4,
   autoPrint: true,
@@ -180,6 +180,54 @@ function normaliseBaseUrl(baseUrl: string) {
 
 function errorText(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+const HTTP_MAX_ATTEMPTS = 3;
+const HTTP_RETRY_DELAY_MS = 500;
+
+function retryableHttpStatus(status: number) {
+  return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
+function wait(milliseconds: number) {
+  return new Promise<void>(resolve => setTimeout(resolve, milliseconds));
+}
+
+async function fetchWithRetry(
+  endpoint: string,
+  init: RequestInit = {},
+): Promise<Response> {
+  const method = String(init.method || 'GET').toUpperCase();
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= HTTP_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await fetch(endpoint, init);
+      if (!response.ok) {
+        console.warn(
+          `[Jinko Print Bridge] ${method} ${endpoint} -> HTTP ${response.status} ` +
+            `(ครั้งที่ ${attempt}/${HTTP_MAX_ATTEMPTS})`,
+        );
+        if (
+          retryableHttpStatus(response.status) &&
+          attempt < HTTP_MAX_ATTEMPTS
+        ) {
+          await wait(HTTP_RETRY_DELAY_MS * attempt);
+          continue;
+        }
+      }
+      return response;
+    } catch (error) {
+      lastError = error;
+      console.warn(
+        `[Jinko Print Bridge] ${method} ${endpoint} -> ${errorText(error)} ` +
+          `(ครั้งที่ ${attempt}/${HTTP_MAX_ATTEMPTS})`,
+      );
+      if (attempt < HTTP_MAX_ATTEMPTS) {
+        await wait(HTTP_RETRY_DELAY_MS * attempt);
+      }
+    }
+  }
+  throw new Error(`${method} ${endpoint} -> ${errorText(lastError)}`);
 }
 
 type FirestoreTimestamp = {
@@ -497,12 +545,13 @@ function App(): JSX.Element {
   }, []);
 
   const loadPaperWidth = useCallback(async (activeSettings: Settings) => {
+    const endpoint = `${normaliseBaseUrl(
+      activeSettings.apiBaseUrl,
+    )}/api/settings`;
     try {
-      const response = await fetch(
-        `${normaliseBaseUrl(activeSettings.apiBaseUrl)}/api/settings`,
-      );
+      const response = await fetchWithRetry(endpoint);
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+        throw new Error(`GET ${endpoint} -> HTTP ${response.status}`);
       }
       const serverSettings = await response.json();
       paperWidthRef.current =
@@ -580,21 +629,21 @@ function App(): JSX.Element {
       receiptId: string,
       activeSettings: Settings,
     ) => {
-      const response = await fetch(
-        `${normaliseBaseUrl(activeSettings.apiBaseUrl)}/api/print-jobs`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Accept: 'application/json',
-          },
-          body: JSON.stringify({
-            action,
-            id: receiptId,
-            deviceId: await deviceId(),
-          }),
+      const endpoint = `${normaliseBaseUrl(
+        activeSettings.apiBaseUrl,
+      )}/api/print-jobs`;
+      const response = await fetchWithRetry(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
         },
-      );
+        body: JSON.stringify({
+          action,
+          id: receiptId,
+          deviceId: await deviceId(),
+        }),
+      });
       if (!response.ok) {
         return false;
       }
@@ -690,19 +739,19 @@ function App(): JSX.Element {
       const activeSettings = overrideSettings || settingsRef.current;
       try {
         await loadPaperWidth(activeSettings);
-        const response = await fetch(
-          `${normaliseBaseUrl(activeSettings.apiBaseUrl)}/api/orders`,
-          {
-            headers: {Accept: 'application/json'},
-          },
-        );
+        const ordersEndpoint = `${normaliseBaseUrl(
+          activeSettings.apiBaseUrl,
+        )}/api/orders`;
+        const response = await fetchWithRetry(ordersEndpoint, {
+          headers: {Accept: 'application/json'},
+        });
         if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
+          throw new Error(`GET ${ordersEndpoint} -> HTTP ${response.status}`);
         }
         const allOrders = (await response.json()) as Order[];
         let receiptJobs: ReceiptJob[] = [];
         try {
-          const receiptResponse = await fetch(
+          const receiptResponse = await fetchWithRetry(
             `${normaliseBaseUrl(activeSettings.apiBaseUrl)}/api/print-jobs`,
             {headers: {Accept: 'application/json'}},
           );

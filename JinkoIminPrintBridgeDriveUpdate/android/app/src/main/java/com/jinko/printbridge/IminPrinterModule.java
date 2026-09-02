@@ -80,10 +80,10 @@ public final class IminPrinterModule extends ReactContextBaseJavaModule {
   @ReactMethod
   public void saveSettings(ReadableMap settings, Promise promise) {
     SharedPreferences.Editor edit = preferences.edit();
-    saveString(edit, settings, "apiBaseUrl", "https://your-project.vercel.app");
+    saveString(edit, settings, "apiBaseUrl", "https://jinko-order.vercel.app");
     saveString(edit, settings, "shopName", "จิ๊นโค");
     saveString(edit, settings, "drinkCategory", "เครื่องดื่ม");
-    saveString(edit, settings, "kitchenHost", "192.0.2.10");
+    saveString(edit, settings, "kitchenHost", "192.168.1.242");
     saveInt(edit, settings, "kitchenPort", 9100);
     saveInt(edit, settings, "pollSeconds", 4);
     saveBoolean(edit, settings, "autoPrint", true);
@@ -544,10 +544,10 @@ public final class IminPrinterModule extends ReactContextBaseJavaModule {
 
   private WritableMap settingsMap() {
     WritableMap settings = Arguments.createMap();
-    settings.putString("apiBaseUrl", preferences.getString("apiBaseUrl", "https://your-project.vercel.app"));
+    settings.putString("apiBaseUrl", preferences.getString("apiBaseUrl", "https://jinko-order.vercel.app"));
     settings.putString("shopName", preferences.getString("shopName", "จิ๊นโค"));
     settings.putString("drinkCategory", preferences.getString("drinkCategory", "เครื่องดื่ม"));
-    settings.putString("kitchenHost", preferences.getString("kitchenHost", "192.0.2.10"));
+    settings.putString("kitchenHost", preferences.getString("kitchenHost", "192.168.1.242"));
     settings.putInt("kitchenPort", preferences.getInt("kitchenPort", 9100));
     settings.putInt("pollSeconds", preferences.getInt("pollSeconds", 4));
     settings.putBoolean("autoPrint", preferences.getBoolean("autoPrint", true));

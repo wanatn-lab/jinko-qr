@@ -23,6 +23,7 @@ apk/
 **/*.aab
 **/*.ipa
 **/*.zip
+!JinkoOrderVercel/print-agent.zip
 **/*.sql
 **/*.sqlite
 **/*.sqlite3
@@ -33,4 +34,3 @@ apk/
 Thumbs.db
 **/.idea/
 **/.vscode/
-

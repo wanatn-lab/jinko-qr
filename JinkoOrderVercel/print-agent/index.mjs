@@ -1,7 +1,7 @@
 import net from 'net';
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { renderTicket, renderTicketToPngBuffer } from './lib/render.mjs';
 import { initPrinter, feed, cutPaper, rasterToEscPos } from './lib/escpos.mjs';
 
@@ -10,6 +10,47 @@ const CONFIG_PATH = path.join(__dirname, 'config.json');
 const PRINTED_PATH = path.join(__dirname, 'printed.json');
 
 const TEST_MODE = process.argv.includes('--test');
+const HTTP_MAX_ATTEMPTS = 3;
+const HTTP_RETRY_DELAY_MS = 500;
+
+function retryableHttpStatus(status) {
+  return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+export async function fetchWithRetry(endpoint, init = {}) {
+  const method = String(init.method || 'GET').toUpperCase();
+  let lastError = null;
+  for (let attempt = 1; attempt <= HTTP_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await fetch(endpoint, init);
+      if (!response.ok) {
+        console.warn(
+          `[api] ${method} ${endpoint} -> HTTP ${response.status} ` +
+          `(attempt ${attempt}/${HTTP_MAX_ATTEMPTS})`
+        );
+        if (retryableHttpStatus(response.status) && attempt < HTTP_MAX_ATTEMPTS) {
+          await delay(HTTP_RETRY_DELAY_MS * attempt);
+          continue;
+        }
+      }
+      return response;
+    } catch (error) {
+      lastError = error;
+      console.warn(
+        `[api] ${method} ${endpoint} -> ${error.message || error} ` +
+        `(attempt ${attempt}/${HTTP_MAX_ATTEMPTS})`
+      );
+      if (attempt < HTTP_MAX_ATTEMPTS) {
+        await delay(HTTP_RETRY_DELAY_MS * attempt);
+      }
+    }
+  }
+  throw new Error(`${method} ${endpoint} -> ${lastError?.message || lastError || 'request failed'}`);
+}
 
 function loadLocalConfig() {
   const raw = fs.readFileSync(CONFIG_PATH, 'utf8');
@@ -35,8 +76,9 @@ function savePrinted(set) {
 // never has to touch this file. Values in config.json are only used as a
 // fallback if that fetch fails (e.g. no internet at the moment).
 async function fetchRemoteSettings(apiBase) {
-  const res = await fetch(apiBase.replace(/\/$/, '') + '/api/settings');
-  if (!res.ok) throw new Error(`GET /api/settings -> HTTP ${res.status}`);
+  const endpoint = apiBase.replace(/\/$/, '') + '/api/settings';
+  const res = await fetchWithRetry(endpoint);
+  if (!res.ok) throw new Error(`GET ${endpoint} -> HTTP ${res.status}`);
   return res.json();
 }
 
@@ -140,11 +182,13 @@ async function reportPrinterStatus(apiBase, printers) {
     }
   }
   try {
-    await fetch(apiBase.replace(/\/$/, '') + '/api/printer-status', {
+    const endpoint = apiBase.replace(/\/$/, '') + '/api/printer-status';
+    const response = await fetchWithRetry(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ printers: results }),
     });
+    if (!response.ok) throw new Error(`POST ${endpoint} -> HTTP ${response.status}`);
   } catch (err) {
     console.warn('[warn] could not report printer status to the website (status just won\'t show as fresh there):', err.message);
   }
@@ -236,8 +280,9 @@ async function pollOnce(localConfig, printed) {
     reportPrinterStatus(config.apiBase, printers).catch(() => {});
   }
 
-  const res = await fetch(config.apiBase.replace(/\/$/, '') + '/api/orders');
-  if (!res.ok) throw new Error(`GET /api/orders -> HTTP ${res.status}`);
+  const endpoint = config.apiBase.replace(/\/$/, '') + '/api/orders';
+  const res = await fetchWithRetry(endpoint);
+  if (!res.ok) throw new Error(`GET ${endpoint} -> HTTP ${res.status}`);
   const orders = await res.json();
 
   const toPrint = orders.filter((o) => o.status !== 'done' && !printed.has(o.id));
@@ -278,6 +323,6 @@ async function main() {
   setInterval(loop, localConfig.pollIntervalMs || 4000);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main();
 }

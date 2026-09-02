@@ -15,6 +15,7 @@ import android.graphics.Bitmap;
 import android.graphics.Typeface;
 import android.os.Build;
 import android.os.IBinder;
+import android.util.Log;
 
 import androidx.annotation.Nullable;
 
@@ -53,9 +54,13 @@ import java.util.concurrent.TimeUnit;
  * deliberately live here rather than relying on JavaScript remaining resident.
  */
 public final class OrderPollingService extends Service {
+  private static final String TAG = "JinkoPrintBridge";
   private static final String BOOTSTRAP_COMPLETE = "bootstrap_complete";
   private static final int CONNECT_TIMEOUT_MS = 4000;
   private static final int HTTP_TIMEOUT_MS = 8000;
+  private static final int HTTP_MAX_ATTEMPTS = 3;
+  private static final long HTTP_RETRY_DELAY_MS = 500;
+  private static final int PRINTER_STATUS_TIMEOUT_MS = 1500;
   private static final int NOTIFICATION_ID = 240814;
   private static final String CHANNEL_ID = "jinko_print_bridge";
   private static final long HANDOFF_DELAY_SECONDS = 2;
@@ -137,16 +142,28 @@ public final class OrderPollingService extends Service {
       return;
     }
     try {
-      String baseUrl = normaliseBaseUrl(preferences.getString("apiBaseUrl", "https://your-project.vercel.app"));
+      String baseUrl = normaliseBaseUrl(preferences.getString("apiBaseUrl", "https://jinko-order.vercel.app"));
       // The foreground React screen is paused while this service owns printing.
       // Fetch the full settings object here as well, not just the paper width;
       // older queued jobs may not contain their own receiptConfig snapshot.
       JSONObject serverSettings = loadServerSettings(baseUrl);
+      try {
+        reportPrinterStatus(baseUrl, serverSettings);
+      } catch (Exception error) {
+        Log.w(TAG, "POST " + baseUrl + "/api/printer-status -> " + message(error));
+      }
       int paperWidthDots = paperWidthDots(serverSettings);
       JSONObject fallbackReceiptConfig = serverSettings.optJSONObject("receipt");
       List<QueuedTicket> tickets = readQueuedTickets(fetchArray(baseUrl + "/api/orders"), paperWidthDots);
-      List<QueuedReceipt> receipts = readQueuedReceipts(
-          fetchObject(baseUrl + "/api/print-jobs"), paperWidthDots, fallbackReceiptConfig);
+      List<QueuedReceipt> receipts = Collections.emptyList();
+      try {
+        receipts = readQueuedReceipts(
+            fetchObject(baseUrl + "/api/print-jobs"), paperWidthDots, fallbackReceiptConfig);
+      } catch (Exception error) {
+        // Receipt printing is an optional queue.  A missing/temporarily unavailable receipt API
+        // must never stop kitchen tickets that were already fetched successfully from /api/orders.
+        Log.w(TAG, "คิวใบเสร็จไม่พร้อม แต่ยังพิมพ์ครัวต่อ: " + message(error));
+      }
       boolean bootstrapping = !preferences.getBoolean(BOOTSTRAP_COMPLETE, false);
       boolean skipExisting = bootstrapping && preferences.getBoolean("skipExistingOnFirstSync", true);
       java.util.Set<String> printedKeys = PrintHistory.getPrintedKeys(preferences);
@@ -180,7 +197,7 @@ public final class OrderPollingService extends Service {
             // Kitchen route stays on its own dedicated LAN printer regardless of printerMode —
             // that path was already vendor-neutral before this change.
             printNetwork(queued.ticket,
-                preferences.getString("kitchenHost", "192.0.2.10"),
+                preferences.getString("kitchenHost", "192.168.1.242"),
                 Math.max(1, Math.min(65535, preferences.getInt("kitchenPort", 9100))));
           }
           PrintHistory.markPrinted(preferences, queued.key);
@@ -391,7 +408,73 @@ public final class OrderPollingService extends Service {
     return postJson(baseUrl + "/api/print-jobs", payload).optBoolean("ok", false);
   }
 
+  private void reportPrinterStatus(String baseUrl, JSONObject serverSettings) throws Exception {
+    JSONArray statuses = new JSONArray();
+    JSONArray configured = serverSettings.optJSONArray("printers");
+    if (configured != null) {
+      for (int index = 0; index < configured.length(); index++) {
+        JSONObject printer = configured.optJSONObject(index);
+        if (printer == null) continue;
+        String host = text(printer, "ip", "").trim();
+        int port = Math.max(1, Math.min(65535, printer.optInt("port", 9100)));
+        statuses.put(printerStatus(
+            text(printer, "id", "printer-" + index),
+            text(printer, "name", "เครื่องพิมพ์ " + (index + 1)),
+            host,
+            port));
+      }
+    }
+    if (statuses.length() == 0) {
+      statuses.put(printerStatus(
+          "kitchen-printer",
+          "เครื่องพิมพ์ครัว",
+          preferences.getString("kitchenHost", "192.168.1.242"),
+          Math.max(1, Math.min(65535, preferences.getInt("kitchenPort", 9100)))));
+    }
+    JSONObject payload = new JSONObject();
+    payload.put("printers", statuses);
+    postJson(baseUrl + "/api/printer-status", payload);
+  }
+
+  private static JSONObject printerStatus(String id, String name, String host, int port)
+      throws JSONException {
+    JSONObject status = new JSONObject();
+    status.put("id", id);
+    status.put("name", name);
+    status.put("ip", host);
+    status.put("port", port);
+    String error = probePrinter(host, port);
+    status.put("ok", error == null);
+    if (error != null) status.put("error", error);
+    return status;
+  }
+
+  private static String probePrinter(String host, int port) {
+    if (host == null || host.trim().isEmpty()) return "ยังไม่ได้ตั้งค่า IP";
+    try (Socket socket = new Socket()) {
+      socket.connect(new InetSocketAddress(host.trim(), port), PRINTER_STATUS_TIMEOUT_MS);
+      return null;
+    } catch (Exception error) {
+      return message(error);
+    }
+  }
+
   private static String fetchString(String endpoint) throws Exception {
+    Exception lastError = null;
+    for (int attempt = 1; attempt <= HTTP_MAX_ATTEMPTS; attempt++) {
+      try {
+        return fetchStringOnce(endpoint);
+      } catch (Exception error) {
+        lastError = error;
+        logApiFailure("GET", endpoint, attempt, error);
+        if (!shouldRetry(error) || attempt == HTTP_MAX_ATTEMPTS) break;
+        waitBeforeRetry(attempt);
+      }
+    }
+    throw lastError == null ? new IllegalStateException("GET " + endpoint + " failed") : lastError;
+  }
+
+  private static String fetchStringOnce(String endpoint) throws Exception {
     HttpURLConnection connection = (HttpURLConnection) new URL(endpoint).openConnection();
     connection.setRequestMethod("GET");
     connection.setConnectTimeout(HTTP_TIMEOUT_MS);
@@ -399,7 +482,9 @@ public final class OrderPollingService extends Service {
     connection.setRequestProperty("Accept", "application/json");
     try {
       int status = connection.getResponseCode();
-      if (status < 200 || status >= 300) throw new IllegalStateException("HTTP " + status);
+      if (status < 200 || status >= 300) {
+        throw new HttpStatusException("GET", endpoint, status, "");
+      }
       InputStream input = connection.getInputStream();
       try {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
@@ -415,6 +500,24 @@ public final class OrderPollingService extends Service {
   }
 
   private static JSONObject postJson(String endpoint, JSONObject payload) throws Exception {
+    Exception lastError = null;
+    for (int attempt = 1; attempt <= HTTP_MAX_ATTEMPTS; attempt++) {
+      try {
+        return postJsonOnce(endpoint, payload);
+      } catch (Exception error) {
+        lastError = error;
+        logApiFailure("POST", endpoint, attempt, error);
+        if (!shouldRetry(error)) {
+          return errorJson(error);
+        }
+        if (attempt == HTTP_MAX_ATTEMPTS) break;
+        waitBeforeRetry(attempt);
+      }
+    }
+    throw lastError == null ? new IllegalStateException("POST " + endpoint + " failed") : lastError;
+  }
+
+  private static JSONObject postJsonOnce(String endpoint, JSONObject payload) throws Exception {
     HttpURLConnection connection = (HttpURLConnection) new URL(endpoint).openConnection();
     connection.setRequestMethod("POST");
     connection.setConnectTimeout(HTTP_TIMEOUT_MS);
@@ -445,10 +548,52 @@ public final class OrderPollingService extends Service {
           input.close();
         }
       }
-      if (status < 200 || status >= 300) return new JSONObject(body);
+      if (status < 200 || status >= 300) {
+        throw new HttpStatusException("POST", endpoint, status, body);
+      }
       return new JSONObject(body);
     } finally {
       connection.disconnect();
+    }
+  }
+
+  private static boolean shouldRetry(Exception error) {
+    if (!(error instanceof HttpStatusException)) return true;
+    int status = ((HttpStatusException) error).status;
+    return status == 408 || status == 425 || status == 429 || status >= 500;
+  }
+
+  private static JSONObject errorJson(Exception error) {
+    JSONObject result;
+    try {
+      String body = error instanceof HttpStatusException ? ((HttpStatusException) error).body : "";
+      result = body == null || body.trim().isEmpty() ? new JSONObject() : new JSONObject(body);
+    } catch (JSONException ignored) {
+      result = new JSONObject();
+    }
+    try {
+      result.put("ok", false);
+      if (error instanceof HttpStatusException) {
+        result.put("status", ((HttpStatusException) error).status);
+      }
+      result.put("error", message(error));
+    } catch (JSONException ignored) {
+      // JSONObject created in this method always accepts these scalar values.
+    }
+    return result;
+  }
+
+  private static void logApiFailure(String method, String endpoint, int attempt, Exception error) {
+    Log.w(TAG, method + " " + endpoint + " -> " + message(error)
+        + " (attempt " + attempt + "/" + HTTP_MAX_ATTEMPTS + ")");
+  }
+
+  private static void waitBeforeRetry(int attempt) throws InterruptedException {
+    try {
+      Thread.sleep(HTTP_RETRY_DELAY_MS * attempt);
+    } catch (InterruptedException error) {
+      Thread.currentThread().interrupt();
+      throw error;
     }
   }
 
@@ -698,7 +843,7 @@ public final class OrderPollingService extends Service {
   }
 
   private static String normaliseBaseUrl(String value) {
-    return value(value, "https://your-project.vercel.app").replaceAll("/+\\z", "");
+    return value(value, "https://jinko-order.vercel.app").replaceAll("/+\\z", "");
   }
 
   private static String text(JSONObject object, String key, String fallback) {
@@ -843,6 +988,17 @@ public final class OrderPollingService extends Service {
 
   private static String message(Exception error) {
     return error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
+  }
+
+  private static final class HttpStatusException extends Exception {
+    final int status;
+    final String body;
+
+    HttpStatusException(String method, String endpoint, int status, String body) {
+      super(method + " " + endpoint + " -> HTTP " + status);
+      this.status = status;
+      this.body = body;
+    }
   }
 
   private static final class QueuedTicket {
