@@ -1,5 +1,4 @@
 import { redis } from "./_redis.js";
-import { requireAdmin } from "./_auth.js";
 
 // Defaults match the original receipt and kitchen print layouts. Existing
 // stored settings still take priority over these values.
@@ -42,7 +41,6 @@ export default async function handler(req, res) {
   }
 
   if (req.method === "POST") {
-    if (!(await requireAdmin(req, res))) return;
     const body = req.body || {};
     const current = (await redis.get("settings")) || SEED_SETTINGS;
     const merged = { ...current, ...body };

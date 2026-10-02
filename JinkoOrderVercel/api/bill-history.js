@@ -1,5 +1,4 @@
 import { redis } from "./_redis.js";
-import { requireAdmin } from "./_auth.js";
 
 const HISTORY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const BANGKOK_OFFSET_MS = 7 * 60 * 60 * 1000;
@@ -101,7 +100,6 @@ function legacyBillsFromOrders(value, settledOrderIds, now = Date.now()) {
 }
 
 export default async function handler(req, res) {
-  if (!(await requireAdmin(req, res))) return;
   const now = Date.now();
   const history = recentBills(await redis.get("billHistory"), now);
 

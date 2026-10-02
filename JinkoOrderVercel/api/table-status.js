@@ -1,5 +1,4 @@
 import { redis } from "./_redis.js";
-import { requireAdmin } from "./_auth.js";
 
 // Aggregates recent orders per table for the "สถานะโต๊ะ" dashboard, and lets
 // staff advance a menu item's kitchen status (cooking -> ready -> served) or
@@ -179,7 +178,6 @@ export default async function handler(req, res) {
   }
 
   if (req.method === "POST") {
-    if (!(await requireAdmin(req, res))) return;
     const body = req.body || {};
 
     // Checkout is deliberately a single server-side operation.  When staff selects

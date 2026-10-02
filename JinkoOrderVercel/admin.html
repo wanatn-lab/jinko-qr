@@ -537,7 +537,6 @@
   <h1>แอดมิน</h1>
   <div style="display:flex;align-items:center;gap:14px">
     <a href="/order" style="color:#fff;font-size:13px" target="_blank">ดูหน้าลูกค้า →</a>
-    <a href="/api/auth/logout" style="color:#fff;font-size:13px">ออกจากระบบ</a>
   </div>
 </div>
 
@@ -1346,30 +1345,10 @@ async function saveGeneralPrintSettings() {
   alert('บันทึกตั้งค่าทั่วไปแล้ว');
 }
 
-function heartbeatAge(updatedAt, now = Date.now()) {
-  if (!updatedAt) return { valid: false, ageMs: Infinity, label: 'ไม่เคยเชื่อมต่อ' };
-  const timestamp = new Date(updatedAt).getTime();
-  if (!Number.isFinite(timestamp) || timestamp <= 0 || timestamp > now + 60000) {
-    return { valid: false, ageMs: Infinity, label: 'ไม่เคยเชื่อมต่อ' };
-  }
-  const ageMs = Math.max(0, now - timestamp);
-  const seconds = ageMs / 1000;
-  if (seconds < 60) {
-    return { valid: true, ageMs, label: Math.max(1, Math.round(seconds)) + ' วินาทีที่แล้ว' };
-  }
-  if (seconds < 3600) {
-    return { valid: true, ageMs, label: 'ประมาณ ' + Math.round(seconds / 60) + ' นาทีที่แล้ว' };
-  }
-  if (seconds < 86400) {
-    return { valid: true, ageMs, label: 'ประมาณ ' + Math.round(seconds / 3600) + ' ชั่วโมงที่แล้ว' };
-  }
-  return { valid: true, ageMs, label: 'ประมาณ ' + Math.round(seconds / 86400) + ' วันที่แล้ว' };
-}
-
 function statusFor(printer) {
-  const heartbeat = heartbeatAge(PRINTER_STATUS.updatedAt);
-  if (!heartbeat.valid) return { cls: 'unknown', label: 'ตัวเชื่อมเครื่องพิมพ์: ไม่เคยเชื่อมต่อ' };
-  if (heartbeat.ageMs > 20000) return { cls: 'unknown', label: 'ตัวเชื่อมเครื่องพิมพ์ไม่ได้เปิดอยู่ (สัญญาณล่าสุด ' + heartbeat.label + ')' };
+  if (!PRINTER_STATUS.updatedAt) return { cls: 'unknown', label: 'ยังไม่มีข้อมูล — ยังไม่ได้เปิดตัวเชื่อมเครื่องพิมพ์บนคอม' };
+  const ageMs = Date.now() - new Date(PRINTER_STATUS.updatedAt).getTime();
+  if (ageMs > 20000) return { cls: 'unknown', label: 'ตัวเชื่อมเครื่องพิมพ์ไม่ได้เปิดอยู่ (ไม่มีสัญญาณ ' + Math.round(ageMs/1000) + ' วิ)' };
   const match = PRINTER_STATUS.printers.find(p => p.ip === printer.ip);
   if (!match) return { cls: 'unknown', label: 'รอข้อมูลจากตัวเชื่อม...' };
   if (match.ok) return { cls: 'ok', label: 'เชื่อมต่อแล้ว' };
@@ -1454,15 +1433,12 @@ async function pollPrinterStatus() {
     PRINTER_STATUS = { updatedAt: null, printers: [] };
   }
   const banner = document.getElementById('agentBanner');
-  const heartbeat = heartbeatAge(PRINTER_STATUS.updatedAt);
   if (!PRINTERS.length) {
     banner.className = 'agent-banner';
     banner.textContent = 'ยังไม่ได้เพิ่มเครื่องพิมพ์ — เพิ่มเครื่องพิมพ์ด้านล่างก่อน';
-  } else if (!heartbeat.valid || heartbeat.ageMs > 20000) {
+  } else if (!PRINTER_STATUS.updatedAt || (Date.now() - new Date(PRINTER_STATUS.updatedAt).getTime()) > 20000) {
     banner.className = 'agent-banner bad';
-    banner.textContent = heartbeat.valid
-      ? '⚠️ ตัวเชื่อมเครื่องพิมพ์ไม่ได้เปิดอยู่ — สัญญาณล่าสุด ' + heartbeat.label
-      : '⚠️ ยังไม่เคยพบตัวเชื่อมเครื่องพิมพ์ — เปิด Jinko Print Bridge บนเครื่องหน้าร้านก่อน';
+    banner.textContent = '⚠️ ยังไม่พบตัวเชื่อมเครื่องพิมพ์ทำงานอยู่ — เปิดโปรแกรม "เปิดระบบพิมพ์ครัว" บนคอมที่ต่อกับเครื่องพิมพ์ก่อน';
   } else {
     const allOk = PRINTER_STATUS.printers.length && PRINTER_STATUS.printers.every(p => p.ok);
     banner.className = 'agent-banner ' + (allOk ? 'ok' : 'bad');
