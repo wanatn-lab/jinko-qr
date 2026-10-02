@@ -9,6 +9,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@400;500;600;700&family=Noto+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/browser-image-compression@2.0.2/dist/browser-image-compression.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <style>
   /* ===== สถานะโต๊ะ (embedded tab) — scoped under #panel-tablestatus ===== */
 
@@ -596,6 +597,7 @@
         <div><input id="tableCount" type="number" min="1" value="1"></div>
         <div style="flex:0"><button class="btn secondary" onclick="genQr()">อัปเดตจำนวนโต๊ะ</button></div>
         <div style="flex:0"><button class="btn" onclick="window.print()">พิมพ์</button></div>
+        <div style="flex:0"><button class="btn secondary" id="qrDownloadAllBtn" onclick="downloadAllQr()">⬇️ ดาวน์โหลดทั้งหมด</button></div>
       </div>
       <p style="font-size:12px;color:#6b6058;margin:8px 0 0">
         ✅ QR แต่ละโต๊ะจะคงที่ตลอดไป ปริ้นแปะโต๊ะแล้วใช้ได้ยาวๆ ไม่ต้องเปลี่ยน —
@@ -1297,12 +1299,130 @@ function renderQrGrid(n) {
   grid.innerHTML = '';
   for (let t = 1; t <= n; t++) {
     const box = document.createElement('div');
-    box.innerHTML = `<div style="font-size:13px;margin-bottom:6px">โต๊ะ ${t}</div><div class="qr-${t}"></div>`;
+    box.innerHTML = `<div style="font-size:13px;margin-bottom:6px">โต๊ะ ${t}</div><div class="qr-${t}"></div>` +
+      `<div class="no-print" style="display:flex;gap:6px;justify-content:center;margin-top:8px">` +
+      `<button class="btn secondary" style="font-size:12px;padding:5px 10px" onclick="printOneQr(${t})">🖨️ ปริ้น</button>` +
+      `<button class="btn secondary" style="font-size:12px;padding:5px 10px" onclick="downloadOneQr(${t})">⬇️ ดาวน์โหลด</button>` +
+      `</div>`;
     grid.appendChild(box);
     new QRCode(box.querySelector('.qr-' + t), {
       text: location.origin + '/order?table=' + t,
       width: 110, height: 110
     });
+  }
+}
+
+// ---------- QR download (table number baked into the saved image) ----------
+// Builds one PNG image per table: the QR code plus a "โต๊ะ N" label rendered
+// directly onto the canvas (not just shown as a caption in the admin UI), so
+// the exported file is ready to print/display at the table on its own.
+async function buildQrDownloadCanvas(t) {
+  // Render a fresh, high-resolution QR offscreen for export — independent of
+  // the smaller 110px QR shown on screen, so the saved PNG stays crisp.
+  const qrSize = 240;
+  const hidden = document.createElement('div');
+  hidden.style.position = 'fixed';
+  hidden.style.left = '-9999px';
+  document.body.appendChild(hidden);
+  new QRCode(hidden, {
+    text: location.origin + '/order?table=' + t,
+    width: qrSize, height: qrSize
+  });
+  const src = hidden.querySelector('canvas') || hidden.querySelector('img');
+  if (!src) { hidden.remove(); throw new Error('QR not rendered for table ' + t); }
+
+  if (document.fonts && document.fonts.ready) {
+    try { await document.fonts.load("bold 44px 'Noto Sans Thai'"); await document.fonts.ready; } catch {}
+  }
+
+  const pad = 28;
+  const labelH = 70;
+  const canvas = document.createElement('canvas');
+  canvas.width = qrSize + pad * 2;
+  canvas.height = qrSize + pad * 2 + labelH;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(src, pad, pad, qrSize, qrSize);
+  ctx.fillStyle = '#1a1a1a';
+  ctx.font = "bold 40px 'Noto Sans Thai', 'Kanit', sans-serif";
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('โต๊ะ ' + t, canvas.width / 2, pad + qrSize + labelH / 2);
+  hidden.remove();
+  return canvas;
+}
+
+function triggerDownload(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+async function downloadOneQr(t) {
+  const canvas = await buildQrDownloadCanvas(t);
+  canvas.toBlob((blob) => triggerDownload(blob, `qr-table-${t}.png`), 'image/png');
+}
+
+// Prints a single table's QR through the computer's own print dialog, so
+// staff can send it to whatever printer (USB, WiFi, network) is set up on
+// that machine — not limited to the kitchen receipt printers elsewhere in
+// admin. Opened synchronously (before any await) so browsers don't block it
+// as a popup, then filled in once the high-res QR canvas is ready.
+function printOneQr(t) {
+  const printWin = window.open('', '_blank', 'width=420,height=560');
+  if (!printWin) {
+    alert('เบราว์เซอร์บล็อกหน้าต่างปริ้น กรุณาอนุญาตป๊อปอัปสำหรับเว็บนี้แล้วลองใหม่');
+    return;
+  }
+  printWin.document.write('<!DOCTYPE html><html><head><title>กำลังเตรียมพิมพ์...</title></head><body></body></html>');
+  buildQrDownloadCanvas(t).then((canvas) => {
+    const dataUrl = canvas.toDataURL('image/png');
+    printWin.document.open();
+    printWin.document.write(`<!DOCTYPE html><html><head><title>พิมพ์ QR โต๊ะ ${t}</title>
+      <style>
+        @page { margin: 10mm; }
+        html,body{margin:0;height:100%;display:flex;align-items:center;justify-content:center;background:#fff;}
+        img{width:80mm;height:auto;}
+      </style></head>
+      <body><img src="${dataUrl}" alt="QR โต๊ะ ${t}"></body></html>`);
+    printWin.document.close();
+    const img = printWin.document.querySelector('img');
+    const doPrint = () => { printWin.focus(); printWin.print(); };
+    if (img.complete) doPrint(); else img.onload = doPrint;
+  }).catch((err) => {
+    console.error(err);
+    printWin.close();
+    alert('เตรียมไฟล์พิมพ์ไม่สำเร็จ ลองใหม่อีกครั้ง');
+  });
+}
+
+async function downloadAllQr() {
+  const btn = document.getElementById('qrDownloadAllBtn');
+  const n = Number(document.getElementById('tableCount').value) || 1;
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'กำลังเตรียมไฟล์...';
+  try {
+    const zip = new JSZip();
+    for (let t = 1; t <= n; t++) {
+      const canvas = await buildQrDownloadCanvas(t);
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+      zip.file(`qr-table-${t}.png`, blob);
+    }
+    const zipBlob = await zip.generateAsync({ type: 'blob' });
+    triggerDownload(zipBlob, 'qr-all-tables.zip');
+  } catch (err) {
+    console.error(err);
+    alert('ดาวน์โหลดไม่สำเร็จ ลองอัปเดตจำนวนโต๊ะแล้วลองใหม่อีกครั้ง');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
   }
 }
 
