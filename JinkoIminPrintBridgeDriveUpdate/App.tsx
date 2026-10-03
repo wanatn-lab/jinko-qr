@@ -182,54 +182,6 @@ function errorText(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
-const HTTP_MAX_ATTEMPTS = 3;
-const HTTP_RETRY_DELAY_MS = 500;
-
-function retryableHttpStatus(status: number) {
-  return status === 408 || status === 425 || status === 429 || status >= 500;
-}
-
-function wait(milliseconds: number) {
-  return new Promise<void>(resolve => setTimeout(resolve, milliseconds));
-}
-
-async function fetchWithRetry(
-  endpoint: string,
-  init: RequestInit = {},
-): Promise<Response> {
-  const method = String(init.method || 'GET').toUpperCase();
-  let lastError: unknown = null;
-  for (let attempt = 1; attempt <= HTTP_MAX_ATTEMPTS; attempt += 1) {
-    try {
-      const response = await fetch(endpoint, init);
-      if (!response.ok) {
-        console.warn(
-          `[Jinko Print Bridge] ${method} ${endpoint} -> HTTP ${response.status} ` +
-            `(ครั้งที่ ${attempt}/${HTTP_MAX_ATTEMPTS})`,
-        );
-        if (
-          retryableHttpStatus(response.status) &&
-          attempt < HTTP_MAX_ATTEMPTS
-        ) {
-          await wait(HTTP_RETRY_DELAY_MS * attempt);
-          continue;
-        }
-      }
-      return response;
-    } catch (error) {
-      lastError = error;
-      console.warn(
-        `[Jinko Print Bridge] ${method} ${endpoint} -> ${errorText(error)} ` +
-          `(ครั้งที่ ${attempt}/${HTTP_MAX_ATTEMPTS})`,
-      );
-      if (attempt < HTTP_MAX_ATTEMPTS) {
-        await wait(HTTP_RETRY_DELAY_MS * attempt);
-      }
-    }
-  }
-  throw new Error(`${method} ${endpoint} -> ${errorText(lastError)}`);
-}
-
 type FirestoreTimestamp = {
   _seconds?: unknown;
   seconds?: unknown;
@@ -389,7 +341,7 @@ function receiptFor(
   return {
     id: job.id,
     shopName: job.shopName?.trim() || settings.shopName.trim() || 'จิ๊นโค',
-    phone: job.phone?.trim() || '',
+    phone: job.phone?.trim() || '085-529-8799',
     table: String(job.table ?? '-'),
     // The native receipt layout needs a real ISO value to split date/time into columns.
     createdAt: timestampIso(job.createdAt) || new Date().toISOString(),
@@ -545,13 +497,12 @@ function App(): JSX.Element {
   }, []);
 
   const loadPaperWidth = useCallback(async (activeSettings: Settings) => {
-    const endpoint = `${normaliseBaseUrl(
-      activeSettings.apiBaseUrl,
-    )}/api/settings`;
     try {
-      const response = await fetchWithRetry(endpoint);
+      const response = await fetch(
+        `${normaliseBaseUrl(activeSettings.apiBaseUrl)}/api/settings`,
+      );
       if (!response.ok) {
-        throw new Error(`GET ${endpoint} -> HTTP ${response.status}`);
+        throw new Error(`HTTP ${response.status}`);
       }
       const serverSettings = await response.json();
       paperWidthRef.current =
@@ -629,21 +580,21 @@ function App(): JSX.Element {
       receiptId: string,
       activeSettings: Settings,
     ) => {
-      const endpoint = `${normaliseBaseUrl(
-        activeSettings.apiBaseUrl,
-      )}/api/print-jobs`;
-      const response = await fetchWithRetry(endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
+      const response = await fetch(
+        `${normaliseBaseUrl(activeSettings.apiBaseUrl)}/api/print-jobs`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
+          body: JSON.stringify({
+            action,
+            id: receiptId,
+            deviceId: await deviceId(),
+          }),
         },
-        body: JSON.stringify({
-          action,
-          id: receiptId,
-          deviceId: await deviceId(),
-        }),
-      });
+      );
       if (!response.ok) {
         return false;
       }
@@ -739,19 +690,19 @@ function App(): JSX.Element {
       const activeSettings = overrideSettings || settingsRef.current;
       try {
         await loadPaperWidth(activeSettings);
-        const ordersEndpoint = `${normaliseBaseUrl(
-          activeSettings.apiBaseUrl,
-        )}/api/orders`;
-        const response = await fetchWithRetry(ordersEndpoint, {
-          headers: {Accept: 'application/json'},
-        });
+        const response = await fetch(
+          `${normaliseBaseUrl(activeSettings.apiBaseUrl)}/api/orders`,
+          {
+            headers: {Accept: 'application/json'},
+          },
+        );
         if (!response.ok) {
-          throw new Error(`GET ${ordersEndpoint} -> HTTP ${response.status}`);
+          throw new Error(`HTTP ${response.status}`);
         }
         const allOrders = (await response.json()) as Order[];
         let receiptJobs: ReceiptJob[] = [];
         try {
-          const receiptResponse = await fetchWithRetry(
+          const receiptResponse = await fetch(
             `${normaliseBaseUrl(activeSettings.apiBaseUrl)}/api/print-jobs`,
             {headers: {Accept: 'application/json'}},
           );
@@ -935,7 +886,7 @@ function App(): JSX.Element {
         {
           id: 'test-receipt',
           shopName: settings.shopName,
-          phone: '',
+          phone: '085-529-8799',
           table: 'ทดสอบ',
           createdAt: new Date().toISOString(),
           paperWidthDots: paperWidthRef.current,

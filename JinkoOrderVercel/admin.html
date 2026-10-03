@@ -596,7 +596,6 @@
       <div class="row">
         <div><input id="tableCount" type="number" min="1" value="1"></div>
         <div style="flex:0"><button class="btn secondary" onclick="genQr()">อัปเดตจำนวนโต๊ะ</button></div>
-        <div style="flex:0"><button class="btn" onclick="window.print()">พิมพ์</button></div>
         <div style="flex:0"><button class="btn secondary" id="qrDownloadAllBtn" onclick="downloadAllQr()">⬇️ ดาวน์โหลดทั้งหมด</button></div>
       </div>
       <p style="font-size:12px;color:#6b6058;margin:8px 0 0">
@@ -1301,7 +1300,7 @@ function renderQrGrid(n) {
     const box = document.createElement('div');
     box.innerHTML = `<div style="font-size:13px;margin-bottom:6px">โต๊ะ ${t}</div><div class="qr-${t}"></div>` +
       `<div class="no-print" style="display:flex;gap:6px;justify-content:center;margin-top:8px">` +
-      `<button class="btn secondary" style="font-size:12px;padding:5px 10px" onclick="printOneQr(${t})">🖨️ ปริ้น</button>` +
+      `<button class="btn secondary" style="font-size:12px;padding:5px 10px" onclick="sendQrToCounter(${t}, this)">🖨️ ปริ้น</button>` +
       `<button class="btn secondary" style="font-size:12px;padding:5px 10px" onclick="downloadOneQr(${t})">⬇️ ดาวน์โหลด</button>` +
       `</div>`;
     grid.appendChild(box);
@@ -1367,6 +1366,33 @@ function triggerDownload(blob, filename) {
 async function downloadOneQr(t) {
   const canvas = await buildQrDownloadCanvas(t);
   canvas.toBlob((blob) => triggerDownload(blob, `qr-table-${t}.png`), 'image/png');
+}
+
+// Sends a "print this table's QR" job to the drink-counter printer. The
+// /counter-print page (open on the iMin device) picks it up within a few
+// seconds and prints it. Separate queue (/api/qr-print-jobs) — does not touch
+// orders, kitchen tickets or receipts.
+async function sendQrToCounter(t, btn) {
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'กำลังส่งไปเครื่อง...';
+  let ok = false;
+  try {
+    const res = await fetch('/api/qr-print-jobs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'create', table: t })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) throw new Error(data.error || ('HTTP ' + res.status));
+    ok = true;
+    btn.textContent = '✅ ส่งแล้ว';
+  } catch (err) {
+    console.error(err);
+    btn.textContent = '❌ ส่งไม่สำเร็จ';
+    alert('ส่งงานพิมพ์ไปเครื่อง iMin ไม่สำเร็จ ลองใหม่อีกครั้ง');
+  }
+  setTimeout(() => { btn.textContent = original; btn.disabled = false; }, ok ? 2500 : 1500);
 }
 
 // Prints a single table's QR through the computer's own print dialog, so

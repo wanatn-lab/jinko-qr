@@ -81,6 +81,7 @@ vercel --prod
 | `/api/settings` | GET / POST | ดึง/บันทึกชื่อร้าน จำนวนโต๊ะ ขนาดกระดาษ เครื่องพิมพ์ |
 | `/api/orders` | GET / POST | ดึงออเดอร์ย้อนหลัง 24 ชม. / สั่งใหม่ / ปิดออเดอร์ |
 | `/api/printer-status` | GET / POST | สถานะเชื่อมต่อเครื่องพิมพ์ล่าสุดจาก print-agent |
+| `/api/print-jobs` | GET / POST | คิวใบเสร็จ iMin: Bridge claim → พิมพ์ → ยืนยันงาน |
 
 ---
 พอร์ตจาก Netlify มา Vercel โดย Claude (Cowork) — สิงหาคม 2569

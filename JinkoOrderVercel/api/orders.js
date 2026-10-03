@@ -33,14 +33,13 @@ export default async function handler(req, res) {
     // for any caller that doesn't look at kitchenStatus.
     const items = body.items.map((it) => ({
       ...it,
-      note: typeof it.note === "string" ? it.note.trim().slice(0, 300) : "",
       kitchenStatus: it.kitchenStatus || "cooking",
     }));
     const order = {
       id: genId(),
       table: body.table,
       items,
-      note: typeof body.note === "string" ? body.note.trim().slice(0, 300) : "",
+      note: body.note || "",
       status: "new",
       createdAt: new Date().toISOString(),
     };

@@ -9,10 +9,10 @@ public class MainActivity extends ReactActivity {
 
   @Override
   protected void onResume() {
-    // The React screen owns polling while it is visible.  Stop the native worker before the
-    // JavaScript interval resumes so an order cannot be claimed by both paths.
-    OrderPollingService.stop(this);
     super.onResume();
+    // QR labels are issued from the Admin panel and must print even when the app's UI is open.
+    // The native service owns the shared print history, preventing a duplicate handoff.
+    OrderPollingService.start(this);
   }
 
   @Override
@@ -46,4 +46,3 @@ public class MainActivity extends ReactActivity {
         DefaultNewArchitectureEntryPoint.getFabricEnabled());
   }
 }
-

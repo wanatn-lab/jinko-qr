@@ -78,8 +78,9 @@ android {
         applicationId "com.jinko.printbridge"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 202
-        versionName "2.0.2"
+        // Higher than the installed 2.0.2 build so Android accepts this as an upgrade.
+        versionCode 203
+        versionName "2.0.3"
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_1_8
@@ -147,7 +148,7 @@ tasks.register("copyReleaseApk", Copy) {
     dependsOn("assembleRelease")
     from(layout.buildDirectory.file("outputs/apk/release/app-release.apk"))
     into(layout.buildDirectory.dir("outputs/apk/distribution"))
-    rename { "jinko-print-bridge-v2.0.2.apk" }
+    rename { "jinko-print-bridge-v2.0.3.apk" }
 }
 
 apply from: file("../../node_modules/@react-native-community/cli-platform-android/native_modules.gradle"); applyNativeModulesAppBuildGradle(project)

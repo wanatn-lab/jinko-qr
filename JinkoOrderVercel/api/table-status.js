@@ -102,7 +102,6 @@ function receiptForTable(orders, clearMap, table, settings, now) {
         name: String(item.name || "รายการ"),
         qty,
         price,
-        note: typeof item.note === "string" ? item.note : "",
         lineTotal: price * qty,
       });
     }
@@ -167,7 +166,6 @@ export default async function handler(req, res) {
           price: item.price,
           qty: item.qty,
           category: item.category || "",
-          note: typeof item.note === "string" ? item.note : "",
           status: item.kitchenStatus || "cooking",
         });
       });

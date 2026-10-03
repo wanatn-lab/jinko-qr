@@ -3,7 +3,6 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@vercel/functions": "3.9.5",
     "@upstash/redis": "^1.34.0"
   }
 }
