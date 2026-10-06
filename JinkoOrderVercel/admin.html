@@ -1157,6 +1157,25 @@ function renderCategoryDatalist() {
   dl.innerHTML = menuCategories().map(c => `<option value="${escAttr(c)}">`).join('');
 }
 
+function setMenuCategory(i, value, select) {
+  const item = MENU[i];
+  if (!item) return;
+
+  let category = value;
+  if (value === '__new__') {
+    const entered = window.prompt('ตั้งชื่อหมวดใหม่', '');
+    if (entered === null) {
+      select.value = (item.category || '').trim();
+      return;
+    }
+    category = entered.trim();
+  }
+
+  item.category = category;
+  // Re-render immediately so the new category is available for other menus.
+  renderList();
+}
+
 function renderMenuCategoryFilter() {
   const el = document.getElementById('menuCategoryFilter');
   if (!el) return;
@@ -1251,7 +1270,11 @@ function renderList() {
       <div class="row">
         <div>
           <label>หมวด</label>
-          <input list="categoryList" value="${escAttr(item.category)}" oninput="MENU[${i}].category = this.value">
+          <select onchange="setMenuCategory(${i}, this.value, this)">
+            <option value="" ${(item.category || '').trim() ? '' : 'selected'}>— ยังไม่เลือกหมวด —</option>
+            ${menuCategories().map(category => `<option value="${escAttr(category)}" ${(item.category || '').trim() === category ? 'selected' : ''}>${escAttr(category)}</option>`).join('')}
+            <option value="__new__">＋ เพิ่มหมวดใหม่…</option>
+          </select>
         </div>
         <div>
           <label>รูปภาพเมนู</label>
@@ -1953,7 +1976,6 @@ async function loadTables(){
       name: it.name,
       price: it.price,
       qty: it.qty,
-      note: it.note || "",
       status: it.status || "cooking",
     })),
   }));
