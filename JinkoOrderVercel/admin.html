@@ -1192,6 +1192,35 @@ function setMenuMustTry(i, enabled, checkbox) {
   if (control) control.classList.toggle('is-selected', Boolean(enabled));
 }
 
+async function setMenuAvailability(i, available, checkbox) {
+  const item = MENU[i];
+  if (!item || !item.id) return;
+
+  const previous = item.available !== false;
+  item.available = Boolean(available);
+  checkbox.disabled = true;
+
+  try {
+    const response = await fetch(API + '/api/menu', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'set-availability', id: item.id, available: item.available })
+    });
+    if (!response.ok) throw new Error('update availability failed');
+
+    const data = await response.json();
+    // Keep the full server record, so a stale page cannot retain old details.
+    MENU[i] = { ...MENU[i], ...(data.item || {}) };
+  } catch (error) {
+    console.error('Menu availability update failed', error);
+    item.available = previous;
+    checkbox.checked = previous;
+    alert('บันทึกสถานะเมนูไม่สำเร็จ กรุณาลองใหม่');
+  } finally {
+    checkbox.disabled = false;
+  }
+}
+
 function renderList() {
   renderCategoryDatalist();
   renderMenuCategoryFilter();
@@ -1253,7 +1282,7 @@ function renderList() {
           <span><strong>✨ ต้องลอง</strong><small>เมนูนี้จะแสดงป้ายสีเด่นบนรูปในหน้าสั่งอาหาร เพื่อให้ลูกค้าเห็นทันที</small></span>
         </label>
         <label class="avail-toggle">
-          <input type="checkbox" ${item.available !== false ? 'checked' : ''} onchange="MENU[${i}].available = this.checked">
+          <input type="checkbox" ${item.available !== false ? 'checked' : ''} onchange="setMenuAvailability(${i}, this.checked, this)">
           <span>มีขายอยู่ <small>(ยกเลิกติ๊กถ้าของหมดชั่วคราว)</small></span>
         </label>
       </div>
