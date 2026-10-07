@@ -27,15 +27,24 @@ function recentBills(value, now = Date.now()) {
     .slice(0, MAX_BILLS);
 }
 
-function safeBill(bill) {
-  const items = Array.isArray(bill.items) ? bill.items.map((item) => ({
+function safeItem(item) {
+  return {
     name: String(item.name || "รายการ"),
     qty: Math.max(1, Number(item.qty) || 1),
     price: Number(item.price) || 0,
     lineTotal: Number.isFinite(Number(item.lineTotal))
       ? Number(item.lineTotal)
       : (Number(item.price) || 0) * Math.max(1, Number(item.qty) || 1),
-  })) : [];
+  };
+}
+
+function safeBill(bill) {
+  // `items` holds only the lines still on the bill, so anything reading it
+  // (receipts, sales dashboard) automatically ignores cancelled lines.
+  const items = Array.isArray(bill.items) ? bill.items.map(safeItem) : [];
+  const cancelledItems = Array.isArray(bill.cancelledItems)
+    ? bill.cancelledItems.map((item) => ({ ...safeItem(item), cancelledAt: item.cancelledAt || null }))
+    : [];
   return {
     id: String(bill.id),
     billNo: String(bill.billNo || bill.id),
@@ -48,6 +57,7 @@ function safeBill(bill) {
     cancelled: isCancelled(bill),
     cancelledAt: bill.cancelledAt || null,
     items,
+    cancelledItems,
   };
 }
 
@@ -110,6 +120,64 @@ export default async function handler(req, res) {
     ]);
     return res.status(200).json({
       ok: true,
+      bill: safeBill(bill),
+      summary: summaryFor(history),
+    });
+  }
+
+  if (body.action === "cancel-item") {
+    if (isCancelled(bill)) {
+      return res.status(409).json({ ok: false, error: "bill is cancelled" });
+    }
+    const index = Number(body.itemIndex);
+    const items = Array.isArray(bill.items) ? bill.items : [];
+    const target = Number.isInteger(index) ? items[index] : null;
+    // Name check guards against a stale screen cancelling the wrong line.
+    if (!target || String(target.name || "รายการ") !== String(body.itemName ?? target.name ?? "รายการ")) {
+      return res.status(409).json({ ok: false, error: "item not found", bill: safeBill(bill), summary: summaryFor(history) });
+    }
+
+    const cancelledAt = new Date(now).toISOString();
+    items.splice(index, 1);
+    bill.items = items;
+    bill.cancelledItems = [
+      ...(Array.isArray(bill.cancelledItems) ? bill.cancelledItems : []),
+      { ...target, cancelledAt },
+    ];
+    if (bill.originalTotal === undefined) bill.originalTotal = Number(bill.total) || 0;
+    bill.total = items.reduce((sum, item) => sum + safeItem(item).lineTotal, 0);
+
+    let billCancelled = false;
+    if (items.length === 0) {
+      // Every line is gone: treat it as a fully cancelled bill.
+      bill.status = "cancelled";
+      bill.cancelledAt = cancelledAt;
+      billCancelled = true;
+    }
+
+    // Receipts still waiting in the print queue must show the new lines/total.
+    const storedJobs = await redis.get("printJobs");
+    const jobs = Array.isArray(storedJobs) ? storedJobs : [];
+    jobs.forEach((job) => {
+      const belongsToBill = job && job.type === "receipt" &&
+        (job.id === bill.id || job.reprintOf === bill.id);
+      if (!belongsToBill || job.status === "printed") return;
+      if (billCancelled) {
+        job.status = "cancelled";
+        job.cancelledAt = cancelledAt;
+      } else {
+        job.items = items.map((item) => ({ ...item }));
+        job.total = bill.total;
+      }
+    });
+
+    await Promise.all([
+      redis.set("billHistory", recentBills(history, now)),
+      redis.set("printJobs", jobs.slice(-MAX_PRINT_JOBS)),
+    ]);
+    return res.status(200).json({
+      ok: true,
+      billCancelled,
       bill: safeBill(bill),
       summary: summaryFor(history),
     });

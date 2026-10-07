@@ -433,6 +433,14 @@
   #panel-billhistory .bh-item-name{font-size:14px;line-height:1.35;font-weight:600;word-break:break-word;}
   #panel-billhistory .bh-item-qty{font:12px 'Kanit';color:var(--bh-soft);margin-top:2px;}
   #panel-billhistory .bh-item-price{font:700 14px 'Kanit';color:#334155;white-space:nowrap;align-self:center;}
+  #panel-billhistory .bh-item{align-items:center;}
+  #panel-billhistory .bh-item-right{display:flex;align-items:center;gap:10px;}
+  #panel-billhistory .bh-item-cancel{border:1px solid #fecaca;border-radius:8px;background:#fff5f5;color:#b91c1c;font:700 12px 'Noto Sans Thai';padding:6px 9px;cursor:pointer;white-space:nowrap;}
+  #panel-billhistory .bh-item-cancel:disabled{opacity:.55;cursor:wait;}
+  #panel-billhistory .bh-item.is-cancelled .bh-item-name,
+  #panel-billhistory .bh-item.is-cancelled .bh-item-price{text-decoration:line-through;color:#94a3b8;}
+  #panel-billhistory .bh-item-tag{display:inline-block;margin-left:6px;border-radius:999px;background:#ffe4e6;color:#be123c;padding:1px 7px;font:700 11px 'Noto Sans Thai';text-decoration:none;}
+  #panel-billhistory .bh-orig-total{font-size:12px;color:var(--bh-soft);text-align:right;margin:0 0 4px;}
   #panel-billhistory .bh-total{display:flex;justify-content:space-between;align-items:center;margin:16px 0 5px;padding:15px 0 0;border-top:2px solid var(--bh-primary);font-family:'Kanit';font-size:17px;font-weight:700;}
   #panel-billhistory .bh-total span:last-child{font-size:23px;color:var(--bh-primary-dark);}
   #panel-billhistory .bh-total.is-cancelled{border-color:#fda4af;color:#be123c;}
@@ -836,6 +844,7 @@
           </div>
           <h4 class="bh-section-title">รายการอาหาร</h4>
           <div id="bh-items"></div>
+          <p class="bh-orig-total" id="bh-orig-total" hidden></p>
           <div class="bh-total"><span>ยอดสุทธิ</span><span id="bh-total">฿0.00</span></div>
         </div>
         <footer class="bh-sheet-foot">
@@ -2594,11 +2603,27 @@ init();
     document.getElementById('bh-table').textContent = tableLabel(bill.table);
     document.getElementById('bh-number').textContent = bill.billNo || bill.id;
     const items = Array.isArray(bill.items) ? bill.items : [];
-    document.getElementById('bh-items').innerHTML = items.map(item => {
+    const canEditItems = !cancelled && bill.actionsAvailable !== false;
+    const lineOf = (item) => {
       const qty = Math.max(1, Number(item.qty) || 1);
       const lineTotal = Number.isFinite(Number(item.lineTotal)) ? Number(item.lineTotal) : (Number(item.price) || 0) * qty;
-      return `<div class="bh-item"><div><div class="bh-item-name">${escapeHtml(item.name || 'รายการ')}</div><div class="bh-item-qty">จำนวน x${qty}</div></div><div class="bh-item-price">${escapeHtml(money(lineTotal))}</div></div>`;
-    }).join('') || '<div class="bh-empty" style="padding:28px 12px">ไม่มีรายละเอียดรายการ</div>';
+      return { qty, lineTotal };
+    };
+    const activeHtml = items.map((item, index) => {
+      const { qty, lineTotal } = lineOf(item);
+      const btn = canEditItems ? `<button type="button" class="bh-item-cancel" data-item-index="${index}">ยกเลิกรายการ</button>` : '';
+      return `<div class="bh-item"><div><div class="bh-item-name">${escapeHtml(item.name || 'รายการ')}</div><div class="bh-item-qty">จำนวน x${qty}</div></div><div class="bh-item-right"><div class="bh-item-price">${escapeHtml(money(lineTotal))}</div>${btn}</div></div>`;
+    }).join('');
+    const removed = Array.isArray(bill.cancelledItems) ? bill.cancelledItems : [];
+    const removedHtml = removed.map(item => {
+      const { qty, lineTotal } = lineOf(item);
+      return `<div class="bh-item is-cancelled"><div><div class="bh-item-name">${escapeHtml(item.name || 'รายการ')}<span class="bh-item-tag">ยกเลิกแล้ว</span></div><div class="bh-item-qty">จำนวน x${qty}</div></div><div class="bh-item-right"><div class="bh-item-price">${escapeHtml(money(lineTotal))}</div></div></div>`;
+    }).join('');
+    document.getElementById('bh-items').innerHTML = (activeHtml + removedHtml) || '<div class="bh-empty" style="padding:28px 12px">ไม่มีรายละเอียดรายการ</div>';
+    const origEl = document.getElementById('bh-orig-total');
+    const hasOriginal = removed.length > 0 && Number.isFinite(Number(bill.originalTotal));
+    origEl.hidden = !hasOriginal;
+    if(hasOriginal) origEl.textContent = `ยอดเดิม ${money(bill.originalTotal)}`;
     document.getElementById('bh-total').textContent = money(bill.total);
     document.querySelector('#panel-billhistory .bh-total').classList.toggle('is-cancelled', cancelled);
     const actionsAvailable = bill.actionsAvailable !== false;
@@ -2665,6 +2690,42 @@ init();
     }
   }
 
+  async function cancelItem(index, button){
+    if(!selectedBill || isCancelled(selectedBill)) return;
+    const item = (selectedBill.items || [])[index];
+    if(!item) return;
+    const name = item.name || 'รายการ';
+    const isLast = selectedBill.items.length === 1;
+    const msg = isLast
+      ? `"${name}" เป็นรายการสุดท้ายในบิล\nถ้ายกเลิก บิลนี้จะถูกยกเลิกทั้งใบ ยืนยันไหม?`
+      : `ยืนยันยกเลิก "${name}" ?\nยอดบิลจะลดลงตามรายการนี้`;
+    if(!window.confirm(msg)) return;
+    button.disabled = true;
+    try{
+      const response = await fetch('/api/bill-history', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({action:'cancel-item', id:selectedBill.id, itemIndex:index, itemName:name}),
+      });
+      const data = await response.json().catch(()=>({}));
+      if(data.bill){
+        bills = bills.map(bill => String(bill.id) === String(data.bill.id) ? data.bill : bill);
+        billSummary = data.summary && typeof data.summary === 'object' ? data.summary : summaryFromBills(bills);
+        renderBills();
+        openBill(data.bill.id);
+      }
+      if(!response.ok || !data.ok) throw new Error(data.error || 'cancel item failed');
+      showToast(data.billCancelled ? 'ยกเลิกรายการสุดท้าย บิลนี้ถูกยกเลิกทั้งใบ' : 'ยกเลิกรายการแล้ว ยอดบิลถูกปรับลดลง');
+    }catch(error){
+      console.error('cancel item failed', error);
+      showToast(error.message === 'item not found' ? 'รายการนี้เปลี่ยนไปแล้ว โหลดข้อมูลใหม่ให้แล้ว' : 'ยกเลิกรายการไม่สำเร็จ กรุณาลองใหม่');
+      button.disabled = false;
+    }
+  }
+
+  document.getElementById('bh-items').addEventListener('click', event=>{
+    const button = event.target.closest('.bh-item-cancel');
+    if(button) cancelItem(Number(button.dataset.itemIndex), button);
+  });
   list.addEventListener('click', event=>{
     const card = event.target.closest('.bh-card');
     if(card) openBill(card.dataset.billId);
