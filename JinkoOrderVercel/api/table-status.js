@@ -166,7 +166,6 @@ export default async function handler(req, res) {
           price: item.price,
           qty: item.qty,
           category: item.category || "",
-          note: item.note || (itemIndex === 0 ? order.note || "" : ""),
           status: item.kitchenStatus || "cooking",
         });
       });
