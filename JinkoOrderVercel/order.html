@@ -85,6 +85,7 @@ document.getElementById('welcomeLine').textContent = TABLE
 
 let MENU = [];
 let cart = {}; // id -> qty
+let itemNotes = {};
 let activeCat = null; // null = ทั้งหมด
 let searchQuery = '';
 
@@ -211,8 +212,10 @@ function renderCard(item) {
 
 function changeQty(id, delta) {
   const next = (cart[id] || 0) + delta;
-  if (next <= 0) delete cart[id];
-  else cart[id] = next;
+  if (next <= 0) {
+    delete cart[id];
+    delete itemNotes[id];
+  } else cart[id] = next;
   renderMenu();
   updateCartBar();
 }
@@ -265,7 +268,7 @@ function renderReview() {
   const items = cartItems();
   const list = document.getElementById('reviewList');
   list.innerHTML = items.map(it => `
-    <div class="review-row">
+    <div class="review-row" style="flex-wrap:wrap">
       <div style="flex:1">
         <div class="rname">${escAttr(it.name)}</div>
         <div class="rprice">฿${it.price} / ชิ้น</div>
@@ -276,6 +279,7 @@ function renderReview() {
         <button onclick="changeQty('${it.id}', 1); renderReview();">+</button>
       </div>
       <div class="rsubtotal">฿${it.price * it.qty}</div>
+      <input type="text" maxlength="100" placeholder="หมายเหตุเมนูนี้ (ไม่บังคับ)" value="${escAttr(itemNotes[it.id]||'')}" oninput="itemNotes['${it.id}']=this.value" style="flex:0 0 100%">
     </div>
   `).join('');
   const { count, total } = cartCountTotal();
@@ -287,7 +291,11 @@ function renderReview() {
 async function submitOrder() {
   const items = cartItems();
   if (!items.length) return;
-  const note = document.getElementById('orderNote').value.trim();
+  const generalNote = document.getElementById('orderNote').value.trim();
+  const note = items.map(it => {
+    const itemNote = (itemNotes[it.id] || '').trim();
+    return itemNote ? `${it.name}: ${itemNote}` : '';
+  }).filter(Boolean).concat(generalNote ? [generalNote] : []).join('; ');
   const btn = document.getElementById('submitBtn');
   btn.disabled = true;
   btn.textContent = 'กำลังส่ง...';
@@ -299,6 +307,7 @@ async function submitOrder() {
     });
     if (!res.ok) throw new Error('failed');
     cart = {};
+    itemNotes = {};
     document.getElementById('orderNote').value = '';
     renderMenu();
     updateCartBar();
