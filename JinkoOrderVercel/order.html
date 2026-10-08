@@ -52,6 +52,20 @@
   </div>
 </div>
 
+<!-- menu detail bottom sheet -->
+<div id="menuDetailOverlay" class="sheet-overlay" onclick="if(event.target===this) closeMenuDetail()">
+  <div class="menu-detail-panel" role="dialog" aria-modal="true" aria-labelledby="menuDetailName">
+    <div class="sheet-head">
+      <h2>รายละเอียดเมนู</h2>
+      <button class="history-close" aria-label="ปิดรายละเอียดเมนู" onclick="closeMenuDetail()">✕</button>
+    </div>
+    <img id="menuDetailImage" class="menu-detail-image" alt="">
+    <h2 id="menuDetailName"></h2>
+    <p id="menuDetailDescription" class="menu-detail-description"></p>
+    <div id="menuDetailPrice" class="menu-detail-price"></div>
+  </div>
+</div>
+
 <!-- success state -->
 <div id="successOverlay" class="success-overlay">
   <div class="success-card">
@@ -87,6 +101,9 @@ let MENU = [];
 let cart = {}; // id -> qty
 let activeCat = null; // null = ทั้งหมด
 let searchQuery = '';
+let menuDetailOpener = null;
+const menuDetailOverlay = document.getElementById('menuDetailOverlay');
+const menuDetailClose = menuDetailOverlay.querySelector('.history-close');
 
 async function loadMenu() {
   const [menuRes, settingsRes] = await Promise.all([
@@ -196,7 +213,7 @@ function renderCard(item) {
         ${soldOut ? '<span class="badge-soldout">ของหมดวันนี้</span>' : (item.popular ? '<span class="badge-popular">ยอดนิยม 🔥</span>' : '')}
         ${control}
       </div>
-      <div class="body">
+      <div class="body" role="button" tabindex="0" data-detail-id="${escAttr(item.id)}" onclick="openMenuDetail(this.dataset.detailId, this)" onkeydown="if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openMenuDetail(this.dataset.detailId, this) }">
         <h3>${escAttr(item.name)}</h3>
         ${item.desc ? `<p>${escAttr(item.desc)}</p>` : ''}
         <div class="price-row">
@@ -257,6 +274,42 @@ function openReview() {
 function closeReview() {
   document.getElementById('reviewOverlay').classList.remove('open');
 }
+
+function openMenuDetail(id, opener) {
+  const item = MENU.find(i => String(i.id) === String(id));
+  if (!item) return;
+  menuDetailOpener = opener || document.activeElement;
+  const menuDetailImage = document.getElementById('menuDetailImage');
+  const menuDetailName = document.getElementById('menuDetailName');
+  const menuDetailDescription = document.getElementById('menuDetailDescription');
+  const menuDetailPrice = document.getElementById('menuDetailPrice');
+  menuDetailImage.src = item.image || '';
+  menuDetailImage.alt = item.name || '';
+  menuDetailName.textContent = item.name || '';
+  menuDetailDescription.textContent = item.desc || '';
+  menuDetailPrice.textContent = `฿${item.price == null ? '' : item.price}`;
+  menuDetailOverlay.classList.add('open');
+  menuDetailClose.focus();
+}
+
+function closeMenuDetail() {
+  menuDetailOverlay.classList.remove('open');
+  if (menuDetailOpener && typeof menuDetailOpener.focus === 'function') menuDetailOpener.focus();
+  menuDetailOpener = null;
+}
+
+menuDetailOverlay.addEventListener('keydown', event => {
+  if (event.key !== 'Tab') return;
+  const focusable = [...menuDetailOverlay.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')]
+    .filter(element => !element.disabled);
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey ? document.activeElement === first : document.activeElement === last) {
+    event.preventDefault();
+    (event.shiftKey ? last : first).focus();
+  }
+});
 
 function renderReview() {
   const items = cartItems();
@@ -352,6 +405,10 @@ async function openHistory() {
 function closeHistory() {
   document.getElementById('historyOverlay').classList.remove('open');
 }
+
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') closeMenuDetail();
+});
 
 loadMenu();
 </script>

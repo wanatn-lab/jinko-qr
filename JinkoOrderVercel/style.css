@@ -347,6 +347,23 @@ label { font-size: 12px; color: #6b6058; display: block; margin: 8px 0 3px; }
 .confirm-cta:disabled { background: #b8b0a6; cursor: not-allowed; }
 .sheet-note { font-size: 12px; color: #8a7d70; margin: 10px 0 2px; }
 
+/* menu detail bottom sheet */
+.menu-detail-panel {
+  background: #FAF7F2; width: 100%; max-width: 640px; max-height: 86vh;
+  border-radius: 20px 20px 0 0; padding: 18px 16px calc(16px + env(safe-area-inset-bottom, 0px));
+  overflow-y: auto;
+}
+.menu-detail-panel h2 { margin: 0 0 8px; color: #3B2A20; font-size: 18px; }
+.menu-detail-image {
+  width: 100%; max-height: 280px; object-fit: cover; display: block;
+  border-radius: 14px; background: #eee; margin-bottom: 14px;
+}
+.menu-detail-description {
+  margin: 0 0 12px; color: #6b6058; font-size: 14px; line-height: 1.5;
+  white-space: pre-wrap;
+}
+.menu-detail-price { color: #C7521E; font-size: 17px; font-weight: 700; }
+
 .success-overlay {
   display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 70;
   align-items: center; justify-content: center; padding: 20px;
