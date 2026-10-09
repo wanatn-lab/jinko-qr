@@ -16,6 +16,15 @@ function fakeRedis() {
     async set(k, v) { kv.set(k, structuredClone(v)); },
     async incr(k) { const n = (kv.get(k) || 0) + 1; kv.set(k, n); return n; },
     async expire() {},
+    // minimal emulation of the two Lua scripts used by api/_orders-store.js
+    async eval(script, keys, args) {
+      const k = keys[0];
+      if (script.includes("return 'X'")) { const v = kv.get(k); return v === undefined ? false : "X" + JSON.stringify(v); }
+      const cur = kv.get(k);
+      const curRaw = cur === undefined ? undefined : JSON.stringify(cur);
+      if ((curRaw === undefined && args[0] === "") || curRaw === args[0]) { kv.set(k, JSON.parse(args[1])); return 1; }
+      return 0;
+    },
     async hgetall(k) { const v = hashes.get(k); return v ? structuredClone(v) : null; },
     async hset(k, o) { Object.assign(h(k), structuredClone(o)); },
     async hdel(k, f) { delete h(k)[f]; },
@@ -132,4 +141,36 @@ test("bad input is rejected", async () => {
   assert.equal((await call(kitchen, "POST", { action: "item-set", lineIds: [], st: "d" })).code, 400);
   assert.equal((await call(kitchen, "POST", { action: "item-set", lineIds: ["x"], st: "zzz" })).code, 400);
   assert.equal((await call(kitchen, "POST", { action: "nope" })).code, 400);
+});
+
+test("simultaneous orders and kitchen writes never erase each other", async () => {
+  const { orders, redis } = setup();
+  // 10 customers order at the same moment (different tables)
+  await Promise.all(Array.from({ length: 10 }, (_, i) => call(orders, "POST", { table: i + 1, items: [food] })));
+  const stored = await redis.get("orders");
+  assert.equal(stored.length, 10);
+  assert.equal(new Set(stored.map((o) => o.queueNo)).size, 10); // unique running numbers
+});
+
+test("a write that loses the race is retried on fresh data", async () => {
+  const { orders, redis } = setup();
+  await call(orders, "POST", { table: 1, items: [food] });
+  const realEval = redis.eval.bind(redis);
+  let injected = false;
+  redis.eval = async (script, keys, args) => {
+    // right after the first raw read, a competing order sneaks in
+    const out = await realEval(script, keys, args);
+    if (!injected && script.includes("return 'X'")) {
+      injected = true;
+      const cur = await redis.get("orders");
+      cur.push({ id: "sneaky", table: 99, createdAt: new Date().toISOString(), items: [food] });
+      await redis.set("orders", cur);
+    }
+    return out;
+  };
+  const r = await call(orders, "POST", { table: 2, items: [food] });
+  assert.equal(r.code, 200);
+  const ids = (await redis.get("orders")).map((o) => o.id);
+  assert.ok(ids.includes("sneaky"));
+  assert.ok(ids.includes(r.body.order.id));
 });

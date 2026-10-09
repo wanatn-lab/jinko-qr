@@ -122,3 +122,16 @@ Item    { id, orderId, name, qty, note?, status: 'pending'|'done'|'cancelled', i
 - ห้ามเปลี่ยนดีไซน์ / เพิ่มฟีเจอร์นอก spec / แตะ `/admin` และระบบพิมพ์
 - ใช้ API/ฐานข้อมูลเดิม เพิ่มเฉพาะที่จำเป็น (ไม่กระทบข้อมูลเดิม)
 - แยกชั้นหน้าตาออกจาก logic | อุปกรณ์: แท็บเล็ต Android แนวนอน
+
+## การตัดสินใจเพิ่มเติม (ยืนยันโดยเจ้าของงาน 2026-10-09)
+- "สั่งเพิ่ม" = ออเดอร์ที่เข้ามาเมื่อโต๊ะนั้นเปิดอยู่แล้ว (ออเดอร์แรกวันนี้ที่ยังไม่เคลียร์โต๊ะ) ไม่ว่าสั่งจาก admin หรือลูกค้าสแกน QR
+- ชื่อหมวดที่ซ่อน: "เครื่องดื่ม" (config `kitchenConfig.hiddenCategories`)
+- เลข `#` บนการ์ด = เลขคิวรายวัน (`queueNo`) ไม่ใช่เลขบิลตอนคิดเงิน
+- โน้ตเป็นระดับออเดอร์ (ทุกออเดอร์มีโน้ตได้) แสดงใต้รายการแรกของแต่ละออเดอร์ในการ์ด ไม่ซ้ำทุกรายการ
+- แก้การเขียนทับกันของ `orders` ด้วย compare-and-set (`api/_orders-store.js`)
+
+## โครงไฟล์
+- `api/kitchen.js`, `api/_kitchen-logic.js` — API + กฎ (กรองหมวด, เรียงลำดับ)
+- `kitchen.html`, `kitchen-assets/kitchen.css`, `kitchen-assets/view.js` — หน้าตา (แก้ดีไซน์ที่นี่)
+- `kitchen-assets/logic.js`, `gestures.js`, `main.js` — logic (ไม่มี HTML/สี)
+- `kitchen-sw.js`, `kitchen-manifest.webmanifest` — PWA
