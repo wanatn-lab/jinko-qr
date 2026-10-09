@@ -107,6 +107,32 @@
       });
   };
 
+  // Text for the "auto refresh is off" banner ("" while the shop is open).
+  window.shopClosedNotice = function (date) {
+    if (window.isShopOpen(date)) return "";
+    var info = window.shopDayInfo(date);
+    var reason = info.closedDay && !info.special ? "วันนี้ร้านปิด (วันจันทร์)" : "นอกเวลาเปิดร้าน (11:20-21:00)";
+    return reason + " — หน้านี้หยุดอัปเดตอัตโนมัติ รีเฟรชหน้าเพื่อดูข้อมูลล่าสุด";
+  };
+
+  // Any element marked data-shop-closed-notice shows that text while the shop is closed.
+  // Local only (no network): re-checked every 30 seconds and when the special opening changes.
+  function renderNotices() {
+    if (typeof document === "undefined" || !document.querySelectorAll) return;
+    var text = window.shopClosedNotice();
+    var nodes = document.querySelectorAll("[data-shop-closed-notice]");
+    for (var i = 0; i < nodes.length; i++) {
+      nodes[i].textContent = text;
+      nodes[i].style.display = text ? "block" : "none";
+    }
+  }
+  if (typeof document !== "undefined" && document.addEventListener) {
+    document.addEventListener("shop-special-change", renderNotices);
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", renderNotices);
+    else renderNotices();
+  }
+  setInterval(renderNotices, 30 * 1000);
+
   function syncIfMonday() {
     var p = bangkokParts(new Date());
     if (p.weekday === CLOSED_WEEKDAY && p.minute >= SYNC_FROM_MINUTE && p.minute < CLOSE_MINUTE) {
