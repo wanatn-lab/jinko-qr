@@ -1,5 +1,4 @@
 import { redis } from "./_redis.js";
-import { updateOrders } from "./_orders-store.js";
 
 // Aggregates recent orders per table for the "สถานะโต๊ะ" dashboard, and lets
 // staff advance a menu item's kitchen status (cooking -> ready -> served) or
@@ -241,13 +240,13 @@ export default async function handler(req, res) {
       if (!orderId || itemIndex == null || !status) {
         return res.status(400).json({ ok: false, error: "missing orderId/itemIndex/status" });
       }
-      const found = await updateOrders(redis, (orders) => {
-        const order = orders.find((o) => o.id === orderId);
-        if (!order || !order.items || !order.items[itemIndex]) return null;
-        order.items[itemIndex].kitchenStatus = status;
-        return { orders, result: true };
-      });
-      if (!found) return res.status(404).json({ ok: false, error: "order or item not found" });
+      const orders = (await redis.get("orders")) || [];
+      const order = orders.find((o) => o.id === orderId);
+      if (!order || !order.items || !order.items[itemIndex]) {
+        return res.status(404).json({ ok: false, error: "order or item not found" });
+      }
+      order.items[itemIndex].kitchenStatus = status;
+      await redis.set("orders", orders);
       return res.status(200).json({ ok: true });
     }
 
@@ -270,13 +269,13 @@ export default async function handler(req, res) {
       if (!orderId || itemIndex == null) {
         return res.status(400).json({ ok: false, error: "missing orderId/itemIndex" });
       }
-      const found = await updateOrders(redis, (orders) => {
-        const order = orders.find((o) => o.id === orderId);
-        if (!order || !order.items || !order.items[itemIndex]) return null;
-        order.items.splice(itemIndex, 1);
-        return { orders, result: true };
-      });
-      if (!found) return res.status(404).json({ ok: false, error: "order or item not found" });
+      const orders = (await redis.get("orders")) || [];
+      const order = orders.find((o) => o.id === orderId);
+      if (!order || !order.items || !order.items[itemIndex]) {
+        return res.status(404).json({ ok: false, error: "order or item not found" });
+      }
+      order.items.splice(itemIndex, 1);
+      await redis.set("orders", orders);
       return res.status(200).json({ ok: true });
     }
 

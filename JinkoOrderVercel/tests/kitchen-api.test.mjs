@@ -5,7 +5,6 @@ process.env.KV_REST_API_URL ||= "https://example.invalid";
 process.env.KV_REST_API_TOKEN ||= "test-token";
 
 const { createKitchenHandler } = await import("../api/kitchen.js");
-const { createOrdersHandler } = await import("../api/orders.js");
 
 function fakeRedis() {
   const kv = new Map();
@@ -48,34 +47,60 @@ function setup() {
   const redis = fakeRedis();
   return {
     redis,
-    orders: createOrdersHandler({ redis }),
     kitchen: createKitchenHandler({ redis, now: fixed }),
   };
 }
 const food = { id: "m1", name: "กะเพรา", price: 59, category: "จานหลัก", qty: 1 };
 const drink = { id: "m3", name: "ชาเย็น", price: 35, category: "เครื่องดื่ม", qty: 2 };
 
-test("first order gets queueNo, second order for open table is an add-on", async () => {
-  const { orders, redis } = setup();
-  const a = await call(orders, "POST", { table: 7, items: [food] });
-  const b = await call(orders, "POST", { table: 7, items: [food] });
-  const c = await call(orders, "POST", { table: 8, items: [food] });
-  assert.equal(a.body.order.queueNo, 1);
-  assert.equal(a.body.order.isAddOn, undefined);
-  assert.equal(b.body.order.isAddOn, true);
-  assert.equal(b.body.order.queueNo, undefined);
-  assert.equal(b.body.order.items[0].isAddOn, true);
-  assert.equal(c.body.order.queueNo, 2);
-  assert.match(a.body.order.items[0].lineId, /-0$/);
-  assert.equal(a.body.order.items[0].kitchenStatus, "cooking"); // existing field kept
+test("add-on and queue number are derived from existing orders (order creation untouched)", async () => {
+  const { kitchen, redis } = setup();
+  const t = (min) => new Date(NOW.getTime() - min * 60000).toISOString();
+  await redis.set("orders", [
+    { id: "a", table: 7, createdAt: t(30), items: [food] }, // legacy order, no new fields at all
+    { id: "b", table: 8, createdAt: t(20), items: [food] },
+    { id: "c", table: 7, createdAt: t(10), items: [{ ...food, name: "ต้มข่า" }] }, // same table again = add-on
+  ]);
+  const { body } = await call(kitchen, "GET");
+  const t7 = body.cards.find((c) => c.table === 7);
+  const t8 = body.cards.find((c) => c.table === 8);
+  assert.equal(t7.billNo, "0001");
+  assert.equal(t8.billNo, "0002");
+  assert.deepEqual(t7.items.map((i) => i.isAddOn), [false, true]);
+  assert.equal(t7.items[1].addedAt, t(10));
+  assert.deepEqual(t8.items.map((i) => i.isAddOn), [false]);
 });
 
-test("after the table is cleared, the next order is not an add-on", async () => {
-  const { orders, redis } = setup();
-  await call(orders, "POST", { table: 7, items: [food] });
-  await redis.set("tableClears", { 7: new Date(Date.now() + 1000).toISOString() });
-  const n = await call(orders, "POST", { table: 7, items: [food] });
-  assert.equal(n.body.order.isAddOn, undefined);
+test("after the table is cleared, the next order is a fresh table (not an add-on)", async () => {
+  const { kitchen, redis } = setup();
+  const t = (min) => new Date(NOW.getTime() - min * 60000).toISOString();
+  await redis.set("orders", [
+    { id: "a", table: 7, createdAt: t(30), items: [food] },
+    { id: "b", table: 7, createdAt: t(5), items: [food] },
+  ]);
+  await redis.set("tableClears", { 7: t(10) });
+  const { body } = await call(kitchen, "GET");
+  assert.equal(body.cards.length, 1);
+  assert.equal(body.cards[0].items.length, 1);
+  assert.equal(body.cards[0].items[0].isAddOn, false);
+});
+
+test("a line removed by admin never re-attaches an old tick to a different dish", async () => {
+  const { kitchen, redis } = setup();
+  const t = NOW.toISOString();
+  const a = { ...food, name: "กะเพรา" };
+  const b = { ...food, name: "ผัดไทย" };
+  const c = { ...food, name: "ต้มยำ" };
+  await redis.set("orders", [{ id: "o1", table: 1, createdAt: t, items: [a, b, c] }]);
+  let { body } = await call(kitchen, "GET");
+  const ids = body.cards[0].items.map((i) => i.lineId);
+  await call(kitchen, "POST", { action: "item-set", lineIds: [ids[2]], st: "d" }); // tick "ต้มยำ"
+  await redis.set("orders", [{ id: "o1", table: 1, createdAt: t, items: [a, c] }]); // admin removes "ผัดไทย"
+  ({ body } = await call(kitchen, "GET"));
+  const states = Object.fromEntries(body.cards[0].items.map((i) => [i.name, i.st]));
+  assert.equal(states["กะเพรา"], "p");
+  assert.notEqual(states["ต้มยำ"], undefined);
+  assert.equal(states["กะเพรา"] === "d", false); // nothing ticked by mistake
 });
 
 test("drinks are filtered on the server; drinks-only table is not shown", async () => {
@@ -97,7 +122,7 @@ test("done count/move only counts shown items; add-on moves card back to pending
   const { kitchen, redis } = setup();
   const t = NOW.toISOString();
   await redis.set("orders", [
-    { id: "o1", table: 1, createdAt: t, queueNo: 1, items: [{ ...food, lineId: "o1-0" }, { ...drink, lineId: "o1-1" }] },
+    { id: "o1", table: 1, createdAt: t, items: [{ ...food, lineId: "o1-0" }, { ...drink, lineId: "o1-1" }] },
   ]);
   await call(kitchen, "POST", { action: "item-set", lineIds: ["o1-0"], st: "d" });
   let { body } = await call(kitchen, "GET");
@@ -141,36 +166,4 @@ test("bad input is rejected", async () => {
   assert.equal((await call(kitchen, "POST", { action: "item-set", lineIds: [], st: "d" })).code, 400);
   assert.equal((await call(kitchen, "POST", { action: "item-set", lineIds: ["x"], st: "zzz" })).code, 400);
   assert.equal((await call(kitchen, "POST", { action: "nope" })).code, 400);
-});
-
-test("simultaneous orders and kitchen writes never erase each other", async () => {
-  const { orders, redis } = setup();
-  // 10 customers order at the same moment (different tables)
-  await Promise.all(Array.from({ length: 10 }, (_, i) => call(orders, "POST", { table: i + 1, items: [food] })));
-  const stored = await redis.get("orders");
-  assert.equal(stored.length, 10);
-  assert.equal(new Set(stored.map((o) => o.queueNo)).size, 10); // unique running numbers
-});
-
-test("a write that loses the race is retried on fresh data", async () => {
-  const { orders, redis } = setup();
-  await call(orders, "POST", { table: 1, items: [food] });
-  const realEval = redis.eval.bind(redis);
-  let injected = false;
-  redis.eval = async (script, keys, args) => {
-    // right after the first raw read, a competing order sneaks in
-    const out = await realEval(script, keys, args);
-    if (!injected && script.includes("return 'X'")) {
-      injected = true;
-      const cur = await redis.get("orders");
-      cur.push({ id: "sneaky", table: 99, createdAt: new Date().toISOString(), items: [food] });
-      await redis.set("orders", cur);
-    }
-    return out;
-  };
-  const r = await call(orders, "POST", { table: 2, items: [food] });
-  assert.equal(r.code, 200);
-  const ids = (await redis.get("orders")).map((o) => o.id);
-  assert.ok(ids.includes("sneaky"));
-  assert.ok(ids.includes(r.body.order.id));
 });
