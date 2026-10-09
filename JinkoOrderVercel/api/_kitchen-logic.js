@@ -55,9 +55,23 @@ export function bangkokDay(date) {
 
 export const STATUSES = ["p", "d", "c"]; // pending, done, cancelled
 
+// Stable id of one item line. New-style orders may carry their own `lineId`; existing
+// orders do not, so we build one from order id + position + a short fingerprint of the
+// item. If admin removes a line (positions shift), the fingerprint no longer matches, so a
+// tick can never land on the WRONG dish (worst case that one line shows as pending again).
+function fingerprint(text) {
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(36);
+}
+
 export function lineIdOf(order, index) {
   const item = order.items[index];
-  return item && item.lineId ? String(item.lineId) : `${order.id}#${index}`;
+  if (item && item.lineId) return String(item.lineId);
+  return `${order.id}#${index}~${fingerprint(`${item && item.name}|${item && item.qty}`)}`;
 }
 
 export function sessionKeyOf(table, clearedAt) {
@@ -82,23 +96,39 @@ function padQueue(n) {
 export function buildBoard({ orders, clears, itemState, rush, rank, config, now }) {
   const today = bangkokDay(now);
   const hidden = new Set(config.hiddenCategories.map((c) => c.trim()));
-  const sessions = new Map();
 
-  for (const order of Array.isArray(orders) ? orders : []) {
-    if (!order || !order.id || !Array.isArray(order.items)) continue;
+  // Today's orders in arrival order. Nothing about order creation had to change:
+  //  - "add-on" = any order that arrives while its table is already open (not the first one
+  //    since the table was last cleared)
+  //  - the "#" number = position of the table's first order among all of today's orders
+  const todays = (Array.isArray(orders) ? orders : [])
+    .map((order, position) => ({ order, position }))
+    .filter(({ order }) => order && order.id && Array.isArray(order.items))
+    .filter(({ order }) => {
+      const created = new Date(order.createdAt);
+      return !Number.isNaN(created.getTime()) && bangkokDay(created) === today;
+    })
+    .sort(
+      (a, b) =>
+        new Date(a.order.createdAt).getTime() - new Date(b.order.createdAt).getTime() ||
+        a.position - b.position,
+    );
+  const ordinal = new Map(todays.map(({ order }, i) => [order.id, i + 1]));
+
+  const sessions = new Map();
+  for (const { order } of todays) {
     const created = new Date(order.createdAt);
-    if (Number.isNaN(created.getTime()) || bangkokDay(created) !== today) continue;
     const clearedAt = clears && clears[order.table] ? clears[order.table] : null;
     if (clearedAt && created.getTime() <= new Date(clearedAt).getTime()) continue;
 
     const key = sessionKeyOf(order.table, clearedAt);
     let s = sessions.get(key);
+    const isFirst = !s;
     if (!s) {
-      s = { key, table: order.table, createdAt: order.createdAt, queueNo: null, items: [] };
+      s = { key, table: order.table, createdAt: order.createdAt, queueNo: order.queueNo ?? ordinal.get(order.id), items: [] };
       sessions.set(key, s);
     }
-    if (created.getTime() < new Date(s.createdAt).getTime()) s.createdAt = order.createdAt;
-    if (!order.isAddOn && order.queueNo != null && s.queueNo == null) s.queueNo = order.queueNo;
+    const addOn = !isFirst || order.isAddOn === true;
 
     order.items.forEach((item, index) => {
       // Category filter happens here, on the server, with the original category field.
@@ -115,8 +145,8 @@ export function buildBoard({ orders, clears, itemState, rush, rank, config, now 
         orderNote: order.note || "",
         st,
         doneAt: st === "d" && state ? state.at : null,
-        isAddOn: order.isAddOn === true,
-        addedAt: order.isAddOn === true ? item.addedAt || order.createdAt : null,
+        isAddOn: addOn,
+        addedAt: addOn ? item.addedAt || order.createdAt : null,
         createdAt: order.createdAt,
       });
     });
