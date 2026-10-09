@@ -3,5 +3,10 @@
   "apiBase": "https://jinko-order.vercel.app",
   "paperWidthMm": 80,
   "pollIntervalMs": 4000,
-  "shopName": "ร้านของคุณ"
+  "shopName": "ร้านของคุณ",
+  "activeHours": {
+    "start": 11,
+    "end": 21,
+    "timeZone": "Asia/Bangkok"
+  }
 }
