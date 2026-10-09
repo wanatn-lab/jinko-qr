@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<title>จอครัว คิวออเดอร์</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+body{margin:0;font-family:'Noto Sans Thai',system-ui,sans-serif}
+button{font-family:inherit;cursor:pointer}
+@keyframes newpulse{0%,100%{box-shadow:0 0 0 0 rgba(31,120,209,0)}50%{box-shadow:0 0 0 6px rgba(31,120,209,.35)}}
+@keyframes latepulse{0%,100%{opacity:1}50%{opacity:.6}}
+.is-new{animation:newpulse 1.4s ease-in-out infinite}
+.is-late{animation:latepulse 1.2s ease-in-out infinite}
+.main{flex:1;display:flex;min-height:0}
+.pend{flex:1;display:flex;flex-direction:column;min-width:0;border-right:2px solid #dfe3e7}
+.donecol{width:clamp(220px,20vw,300px);flex:none;display:flex;flex-direction:column;background:#f7fbf8}
+@media (max-width:820px){
+  .main{flex-direction:column}
+  .pend{border-right:0}
+  .donecol{width:auto;flex:none;max-height:32vh;border-top:2px solid #dfe3e7}
+}
+.swipe{touch-action:pan-y;user-select:none;-webkit-user-select:none}
+</style>
+</helmet>
+<div style="width:100%;height:100vh;min-height:520px;box-sizing:border-box;background:#ffffff;color:#1b1f23;display:flex;flex-direction:column;overflow:hidden">
+
+  <!-- แถบบนสุด -->
+  <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;padding:10px 20px;background:#f3f5f7;border-bottom:2px solid #dfe3e7">
+    <div style="font-size:26px;font-weight:800">ครัว · คิวออเดอร์</div>
+    <div style="display:flex;gap:8px;margin-left:8px">
+      <div style="background:#ffffff;border:2px solid #dfe3e7;border-radius:12px;padding:2px 14px;font-size:18px">โต๊ะรอทำ <b style="font-size:24px;color:#8a5a00">{{pendingCount}}</b></div>
+    </div>
+    <div style="flex:1"></div>
+    <div style="font-size:32px;font-weight:800;min-width:100px;text-align:right">{{clock}}</div>
+  </div>
+
+  <div class="main">
+
+    <!-- รอทำ : ตั๋วขนาดเท่ากัน จำนวนคอลัมน์ปรับตามความกว้างจอ เลื่อนลงดูคิวถัดไป -->
+    <div class="pend">
+      <div style="display:flex;align-items:baseline;gap:14px;padding:8px 20px 6px">
+        <div style="font-size:22px;font-weight:800;color:#8a5a00">รอทำ</div>
+        <div style="font-size:15px;color:#6b7680">แตะวงกลม = เสร็จ · ปัดรายการไปทางซ้าย = ยกเลิก · เรียงจากรอนานที่สุด · ม่วง = สั่งเพิ่ม · ลาก ⋮⋮ หรือกด "ด่วน" เพื่อขึ้นคิวก่อน · เลื่อนลงดูคิวถัดไป ({{ticketCount}} ใบ)</div>
+      </div>
+
+      <div style="flex:1;min-height:0;overflow-y:auto;padding:0 20px 28px;display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));grid-auto-rows:430px;align-content:start;gap:14px">
+        <sc-for list="{{tickets}}" as="t" hint-placeholder-count="6">
+          <div class="{{t.cls}}" data-oid="{{t.oid}}" style="position:relative;z-index:{{t.z}};transform:{{t.tx}};transition:{{t.trans}};box-shadow:{{t.shadow}};outline:{{t.outline}};background:#ffffff;border-radius:14px;overflow:hidden;border:3px solid {{t.border}};display:flex;flex-direction:column;min-height:0">
+            <sc-if value="{{t.rush}}" hint-placeholder-val="{{ false }}">
+              <div style="background:#1b1f23;color:#ffffff;font-size:15px;font-weight:800;text-align:center;padding:1px 0;letter-spacing:1px">ด่วน · ทำก่อน</div>
+            </sc-if>
+            <div style="display:flex;align-items:center;gap:8px;padding:6px 12px 6px 4px;background:{{t.head}};color:{{t.headFg}}">
+              <button onPointerDown="{{t.gDown}}" onPointerMove="{{t.gMove}}" onPointerUp="{{t.gUp}}" onPointerCancel="{{t.gUp}}" aria-label="ลากเพื่อย้ายคิว" style="touch-action:none;cursor:grab;flex:none;width:30px;align-self:stretch;border:0;background:transparent;color:{{t.headFg}};font-size:22px;line-height:1;padding:0;opacity:.75;user-select:none">⋮⋮</button>
+              <div style="line-height:1.1">
+                <div style="font-size:30px;font-weight:800">โต๊ะ {{t.table}}</div>
+                <div style="display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;font-size:14px;font-weight:600">
+                  <div>#{{t.bill}} · เสร็จ {{t.doneN}}/{{t.total}}</div>
+                  <sc-if value="{{t.hasAdded}}" hint-placeholder-val="{{ false }}">
+                    <div style="background:#6b3fa0;color:#ffffff;border-radius:8px;padding:0 7px;font-size:13px;font-weight:800">+ สั่งเพิ่ม</div>
+                  </sc-if>
+                </div>
+              </div>
+              <sc-if value="{{t.multi}}" hint-placeholder-val="{{ false }}">
+                <div style="font-size:15px;font-weight:800;border:2px solid {{t.headFg}};border-radius:8px;padding:0 6px">ใบ {{t.part}}/{{t.parts}}</div>
+              </sc-if>
+              <div style="flex:1"></div>
+              <div style="text-align:right;line-height:1.1">
+                <div style="font-size:26px;font-weight:800">{{t.time}}</div>
+                <div style="font-size:14px;font-weight:800">{{t.badge}}</div>
+              </div>
+            </div>
+            <div style="flex:1;min-height:0;overflow-y:auto;padding:0 10px">
+              <sc-for list="{{t.items}}" as="it" hint-placeholder-count="4">
+                <div style="position:relative;overflow:hidden;border-bottom:1px solid #e6e9ec">
+                  <button onClick="{{it.doCancel}}" style="position:absolute;right:0;top:0;bottom:0;width:80px;border:0;background:#c9302c;color:#ffffff;font-size:16px;font-weight:800">ยกเลิก</button>
+                  <div class="swipe" onPointerDown="{{it.down}}" onPointerMove="{{it.move}}" onPointerUp="{{it.up}}" onPointerCancel="{{it.up}}" style="position:relative;background:{{it.rowBg}};transform:{{it.tx}};transition:{{it.trans}};display:flex;align-items:center;gap:8px;padding:4px 0;min-height:46px">
+                    <sc-if value="{{it.isCancelled}}" hint-placeholder-val="{{ false }}">
+                      <button onClick="{{it.undo}}" style="width:40px;height:40px;border-radius:20px;border:2px solid #9aa4ad;background:#ffffff;color:#1b1f23;font-size:13px;font-weight:800;padding:0;flex:none">คืน</button>
+                    </sc-if>
+                    <sc-if value="{{it.hasCheck}}" hint-placeholder-val="{{ true }}">
+                      <button onClick="{{it.toggle}}" aria-label="เสร็จ" style="width:40px;height:40px;border-radius:20px;border:3px solid {{it.checkBorder}};background:{{it.checkBg}};color:#ffffff;font-size:22px;font-weight:800;padding:0;flex:none;line-height:1">{{it.checkMark}}</button>
+                    </sc-if>
+                    <div style="font-size:22px;font-weight:800;color:{{it.qtyColor}};min-width:32px;flex:none">{{it.qty}}×</div>
+                    <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+                      <div style="font-size:19px;font-weight:600;line-height:1.2;color:{{it.nameColor}};text-decoration:{{it.deco}}">{{it.name}}</div>
+                      <sc-if value="{{it.note}}" hint-placeholder-val="{{ false }}">
+                        <div style="font-size:15px;font-weight:600;line-height:1.2;color:#b3430a">โน้ต: {{it.note}}</div>
+                      </sc-if>
+                    </div>
+                    <sc-if value="{{it.isAdded}}" hint-placeholder-val="{{ false }}">
+                      <div style="flex:none;background:#6b3fa0;color:#ffffff;border-radius:8px;padding:1px 7px;font-size:13px;font-weight:800">+ สั่งเพิ่ม</div>
+                    </sc-if>
+                    <sc-if value="{{it.isCancelled}}" hint-placeholder-val="{{ false }}">
+                      <div style="font-size:14px;font-weight:800;color:#c9302c">ยกเลิกแล้ว</div>
+                    </sc-if>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+            <div style="display:flex;gap:8px;margin:6px 10px 8px">
+              <button onClick="{{t.toggleRush}}" style="flex:none;min-height:40px;padding:0 14px;border:2px solid #1b1f23;border-radius:10px;background:{{t.rushBg}};color:{{t.rushFg}};font-size:16px;font-weight:800">{{t.rushLabel}}</button>
+              <sc-if value="{{t.manyPending}}" hint-placeholder-val="{{ false }}">
+                <button onClick="{{t.finishAll}}" style="flex:1;min-height:40px;border:2px solid #178a4c;border-radius:10px;background:#e8f5ed;color:#0f6a39;font-size:16px;font-weight:800">เสร็จทั้งใบ ({{t.pendingLeft}})</button>
+              </sc-if>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+
+      <sc-if value="{{noPending}}" hint-placeholder-val="{{ false }}">
+        <div style="position:absolute;left:0;width:1020px;top:300px;text-align:center;font-size:28px;color:#6b7680">ไม่มีออเดอร์ค้าง</div>
+      </sc-if>
+
+      </div>
+
+    <!-- เสร็จ -->
+    <div class="donecol">
+      <div style="padding:8px 16px 6px;font-size:22px;font-weight:800;color:#178a4c">เสร็จแล้ว</div>
+      <div style="flex:1;overflow-y:auto;padding:0 16px 16px;display:flex;flex-direction:column;gap:10px">
+        <sc-for list="{{done}}" as="d" hint-placeholder-count="3">
+          <div style="background:#ffffff;border:2px solid #bfe0cb;border-radius:12px;padding:10px 12px;display:flex;flex-direction:column;gap:4px">
+            <div style="display:flex;align-items:baseline;gap:8px">
+              <div style="font-size:24px;font-weight:800">โต๊ะ {{d.table}}</div>
+              <div style="flex:1;font-size:14px;color:#6b7680">#{{d.bill}}</div>
+              <div style="font-size:15px;font-weight:600;color:#178a4c">{{d.time}}</div>
+            </div>
+            <sc-for list="{{d.items}}" as="di" hint-placeholder-count="2">
+              <div style="display:flex;gap:6px;font-size:15px;color:{{di.color}};text-decoration:{{di.deco}}">
+                <div style="font-weight:800">{{di.qty}}×</div>
+                <div style="flex:1">{{di.name}}</div>
+              </div>
+            </sc-for>
+            <button onClick="{{d.undo}}" style="align-self:flex-start;min-height:40px;padding:0 12px;border-radius:10px;border:2px solid #9aa4ad;background:#ffffff;color:#1b1f23;font-size:15px;font-weight:600">ย้ายกลับ</button>
+          </div>
+        </sc-for>
+        <sc-if value="{{noDone}}" hint-placeholder-val="{{ false }}">
+          <div style="padding:40px 0;text-align:center;font-size:18px;color:#6b7680">ยังไม่มีที่เสร็จ</div>
+        </sc-if>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"lateMin":{"editor":"int","default":20,"min":10,"max":60,"unit":"นาที","section":"เวลา"},"warnMin":{"editor":"int","default":15,"min":5,"max":40,"unit":"นาที","section":"เวลา"},"perTicket":{"editor":"int","default":6,"min":4,"max":8,"unit":"รายการ/ใบ","section":"ตั๋ว"}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    // ข้อมูลตัวอย่างเพื่อแสดงแบบ (ไม่ใช่ข้อมูลจริงของร้าน)
+    // st: p = รอทำ, d = เสร็จ, c = ยกเลิก | secs = เวลาที่ผ่านไปแล้วตอนเปิดหน้าจอ
+    const mk = (id, bill, table, secs, items, extra) => ({ id, bill, table, secs, doneSecs: null, isNew: false,
+      items: items.map((x, i) => ({ id: id * 100 + i, qty: x[0], name: x[1], cat: x[2], note: x[3], st: x[4] || 'p', added: !!x[5] })), ...extra });
+    this.state = {
+      tick: 0, cat: 'all', revealed: null, drag: null, page: 0,
+      orders: [
+        mk(1, '0038', 7, 21 * 60 + 5, [[2, 'ข้าวผัดกะเพราหมูสับ', 'จานหลัก', 'ไข่ดาวไม่สุก'], [1, 'ต้มยำกุ้ง', 'ต้ม/แกง', ''], [2, 'น้ำเปล่า', 'เครื่องดื่ม', '', 'd']]),
+        mk(7, '0036', 8, 6 * 60 + 15, [
+          [2, 'ข้าวผัดกะเพราหมูสับ', 'จานหลัก', 'เผ็ดมาก'], [1, 'ผัดไทยกุ้งสด', 'จานหลัก', ''], [1, 'ข้าวมันไก่', 'จานหลัก', ''],
+          [2, 'ส้มตำไทย', 'จานหลัก', 'ไม่ใส่ปู'], [1, 'ต้มยำกุ้ง', 'ต้ม/แกง', ''], [1, 'แกงเขียวหวานไก่', 'ต้ม/แกง', ''],
+          [3, 'ข้าวสวย', 'จานหลัก', '', 'd'], [4, 'น้ำเปล่า', 'เครื่องดื่ม', '', 'd'], [2, 'ชาเย็น', 'เครื่องดื่ม', 'หวานน้อย'],
+          [1, 'น้ำมะนาวโซดา', 'เครื่องดื่ม', '', 'p', true], [1, 'ต้มข่าไก่', 'ต้ม/แกง', '', 'p', true] ]),
+        mk(2, '0040', 3, 16 * 60 + 40, [[1, 'ผัดไทยกุ้งสด', 'จานหลัก', 'ไม่ใส่ถั่วลิสง (แพ้)'], [2, 'ชาเย็น', 'เครื่องดื่ม', 'หวานน้อย', 'p', true]], { rush: true }),
+        mk(3, '0041', 12, 4 * 60 + 12, [[3, 'ข้าวมันไก่', 'จานหลัก', ''], [3, 'น้ำเปล่า', 'เครื่องดื่ม', '']]),
+        mk(8, '0043', 10, 3 * 60 + 30, [[1, 'ผัดซีอิ๊วหมู', 'จานหลัก', ''], [1, 'ต้มจืดเต้าหู้หมูสับ', 'ต้ม/แกง', '']]),
+        mk(9, '0044', 6, 2 * 60 + 10, [[2, 'ข้าวผัดปู', 'จานหลัก', ''], [2, 'ชามะนาว', 'เครื่องดื่ม', ''], [1, 'ไข่เจียว', 'จานหลัก', 'สุกมาก']]),
+        mk(4, '0042', 5, 25, [[1, 'แกงเขียวหวานไก่', 'ต้ม/แกง', ''], [2, 'ข้าวสวย', 'จานหลัก', '']], { isNew: true }),
+        mk(5, '0039', 9, 7 * 60 + 2, [[2, 'ส้มตำไทย', 'จานหลัก', '', 'd']], { doneSecs: 6 * 60 + 30 }),
+        mk(6, '0037', 2, 11 * 60, [[1, 'ต้มข่าไก่', 'ต้ม/แกง', '', 'd'], [1, 'ข้าวสวย', 'จานหลัก', '', 'c']], { doneSecs: 10 * 60 + 5 })
+      ]
+    };
+  }
+  componentDidMount() {
+    this._t = setInterval(() => this.setState((s) => ({ tick: s.tick + 1 })), 1000);
+  }
+  componentWillUnmount() { clearInterval(this._t); }
+
+  fmt(secs) {
+    const m = Math.floor(secs / 60), s = secs % 60;
+    return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+  }
+  setItems(orderId, fn) {
+    this.setState((s) => ({
+      revealed: null,
+      orders: s.orders.map((o) => {
+        if (o.id !== orderId) return o;
+        const items = o.items.map(fn);
+        const left = items.some((i) => i.st === 'p');
+        let doneSecs = o.doneSecs;
+        if (!left && doneSecs == null) doneSecs = o.secs + s.tick;
+        if (left) doneSecs = null;
+        return { ...o, items, doneSecs, isNew: false };
+      })
+    }));
+  }
+  setOrder(id, patch) {
+    this.setState((s) => ({ orders: s.orders.map((o) => o.id === id ? { ...o, ...patch } : o) }));
+  }
+  // ย้ายออเดอร์ไปก่อนออเดอร์เป้าหมาย
+  reorder(oid, targetId) {
+    const ids = (this._displayOrder || []).filter((x) => x !== oid);
+    const idx = ids.indexOf(targetId);
+    if (idx < 0) return;
+    ids.splice(idx, 0, oid);
+    this.setState((s) => {
+      const tgt = s.orders.find((o) => o.id === targetId);
+      return { orders: s.orders.map((o) => {
+        const r = ids.indexOf(o.id);
+        const next = r >= 0 ? { ...o, rank: r } : o;
+        if (o.id === oid && tgt) next.rush = !!tgt.rush;
+        return next;
+      }) };
+    });
+  }
+  dragHandlers(oid, key) {
+    return {
+      down: (e) => {
+        this._dg = { oid, key, x: e.clientX, y: e.clientY };
+        try { e.currentTarget.setPointerCapture(e.pointerId); } catch (x) {}
+        this.setState({ drag: { key, oid, dx: 0, dy: 0, over: null } });
+      },
+      move: (e) => {
+        if (!this._dg || this._dg.key !== key) return;
+        let over = null;
+        try {
+          const els = document.elementsFromPoint(e.clientX, e.clientY);
+          for (const el of els) {
+            const t = el.closest ? el.closest('[data-oid]') : null;
+            if (t && Number(t.getAttribute('data-oid')) !== oid) { over = Number(t.getAttribute('data-oid')); break; }
+          }
+        } catch (x) {}
+        this.setState({ drag: { key, oid, dx: e.clientX - this._dg.x, dy: e.clientY - this._dg.y, over } });
+      },
+      up: () => {
+        if (!this._dg || this._dg.key !== key) return;
+        const over = this.state.drag ? this.state.drag.over : null;
+        this._dg = null;
+        this.setState({ drag: null });
+        if (over != null) this.reorder(oid, over);
+      }
+    };
+  }
+  swipeHandlers(id) {
+    return {
+      down: (e) => { this._sx = e.clientX; this._sid = id; this._cap = false; },
+      move: (e) => {
+        if (this._sid !== id) return;
+        const dx = e.clientX - this._sx;
+        if (!this._cap && Math.abs(dx) > 8) {
+          this._cap = true;
+          try { e.currentTarget.setPointerCapture(e.pointerId); } catch (x) {}
+        }
+        if (this._cap) this.setState({ drag: { id, dx } });
+      },
+      up: () => {
+        if (this._sid !== id) return;
+        this._sid = null;
+        const dx = this.state.drag && this.state.drag.id === id ? this.state.drag.dx : 0;
+        let revealed = this.state.revealed;
+        if (this._cap) {
+          if (dx < -36) revealed = id;
+          else if (dx > 36) revealed = null;
+        }
+        this._cap = false;
+        this.setState({ drag: null, revealed });
+      }
+    };
+  }
+  renderVals() {
+    const st = this.state;
+    const warn = (this.props.warnMin ?? 15) * 60;
+    const late = (this.props.lateMin ?? 20) * 60;
+    const per = this.props.perTicket ?? 6;
+    const PAGE = 6;
+    const visItems = (o) => o.items;
+    const hasPending = (o) => o.items.some((i) => i.st === 'p');
+
+    // 1 โต๊ะ -> 1 ใบ ถ้ารายการยาว ตัดเป็นหลายใบ (ใบ 1/3, 2/3 ...) วางต่อกัน ใบขนาดเท่ากันทุกใบ
+    const orders = st.orders.filter((o) => hasPending(o) && visItems(o).length)
+      .map((o) => ({ o, e: o.secs + st.tick }))
+      .sort((a, b) => ((b.o.rush ? 1 : 0) - (a.o.rush ? 1 : 0)) || ((a.o.rank ?? 1e6) - (b.o.rank ?? 1e6)) || (b.e - a.e));
+    this._displayOrder = orders.map((x) => x.o.id);
+    const all = [];
+    orders.forEach(({ o, e }) => {
+      const isLate = e >= late, isWarn = e >= warn, isNew = o.isNew && e < 90;
+      const level = isLate ? 'late' : isWarn ? 'warn' : isNew ? 'new' : 'ok';
+      const vis = visItems(o);
+      const parts = Math.ceil(vis.length / per);
+      for (let p = 0; p < parts; p++) {
+        const chunk = vis.slice(p * per, (p + 1) * per);
+        const left = chunk.filter((i) => i.st === 'p');
+        all.push({
+          level, isLate, order: o,
+          bill: o.bill, table: o.table, time: this.fmt(e),
+          doneN: o.items.filter((i) => i.st === 'd').length, total: o.items.length,
+          multi: parts > 1, part: p + 1, parts,
+          badge: { late: 'ช้ามาก!', warn: 'ช้า', new: 'ใหม่', ok: 'ปกติ' }[level],
+          head: { late: '#c9302c', warn: '#f5b301', new: '#1f78d1', ok: '#e8edf1' }[level],
+          headFg: { late: '#ffffff', warn: '#2b1d00', new: '#ffffff', ok: '#1b1f23' }[level],
+          border: { late: '#c9302c', warn: '#f5b301', new: '#1f78d1', ok: '#dfe3e7' }[level],
+          cls: isLate ? 'is-late' : isNew ? 'is-new' : '',
+          hasAdded: chunk.some((i) => i.added && i.st !== 'c'),
+          pendingLeft: left.length, manyPending: left.length > 1,
+          finishAll: () => { const ids = left.map((i) => i.id); this.setItems(o.id, (i) => ids.indexOf(i.id) >= 0 ? { ...i, st: 'd' } : i); },
+          oid: o.id, rush: !!o.rush, key: o.id + '-' + p,
+          rushBg: o.rush ? '#1b1f23' : '#ffffff', rushFg: o.rush ? '#ffffff' : '#1b1f23', rushLabel: o.rush ? 'เลิกด่วน' : 'ด่วน',
+          toggleRush: () => this.setOrder(o.id, { rush: !o.rush, rank: undefined }),
+          chunk
+        });
+      }
+    });
+
+    const pageCount = 1;
+    const page = 0;
+    const slice = all;
+    const lateElsewhereN = 0;
+
+    const tickets = slice.map((t) => {
+      const dg = st.drag && st.drag.key === t.key ? st.drag : null;
+      const h = this.dragHandlers(t.oid, t.key);
+      return {
+      ...t,
+      gDown: h.down, gMove: h.move, gUp: h.up,
+      tx: dg ? 'translate(' + dg.dx + 'px,' + dg.dy + 'px) scale(1.03)' : 'none',
+      z: dg ? 20 : 1,
+      trans: dg ? 'none' : 'transform .2s ease',
+      shadow: dg ? '0 14px 30px rgba(0,0,0,.35)' : 'none',
+      outline: st.drag && st.drag.over === t.oid && !dg ? '4px dashed #1b1f23' : 'none',
+      items: t.chunk.map((i) => {
+        const sw = this.swipeHandlers(i.id);
+        const canSwipe = i.st !== 'c';
+        const dragging = st.drag && st.drag.id === i.id;
+        let x = st.revealed === i.id ? -80 : 0;
+        if (dragging) x = Math.max(-80, Math.min(0, x + st.drag.dx));
+        if (!canSwipe) x = 0;
+        const o = t.order;
+        return {
+          qty: i.qty, name: i.name, note: i.note, isAdded: i.added && i.st !== 'c',
+          rowBg: i.added && i.st !== 'c' ? '#f4eefc' : '#ffffff',
+          isCancelled: i.st === 'c', hasCheck: i.st !== 'c',
+          checkMark: i.st === 'd' ? '✓' : '',
+          checkBg: i.st === 'd' ? '#178a4c' : '#ffffff',
+          checkBorder: i.st === 'd' ? '#178a4c' : '#7a8691',
+          qtyColor: i.st === 'p' ? '#1f5fa8' : '#9aa4ad',
+          nameColor: i.st === 'p' ? '#1b1f23' : '#6b7680',
+          deco: i.st === 'c' ? 'line-through' : 'none',
+          tx: 'translateX(' + x + 'px)',
+          trans: dragging ? 'none' : 'transform .2s ease',
+          down: canSwipe ? sw.down : () => {}, move: canSwipe ? sw.move : () => {}, up: canSwipe ? sw.up : () => {},
+          toggle: () => this.setItems(o.id, (y) => y.id === i.id ? { ...y, st: y.st === 'p' ? 'd' : 'p' } : y),
+          doCancel: () => this.setItems(o.id, (y) => y.id === i.id ? { ...y, st: 'c' } : y),
+          undo: () => this.setItems(o.id, (y) => y.id === i.id ? { ...y, st: 'p' } : y)
+        };
+      })
+      };
+    });
+
+    const done = st.orders.filter((o) => !hasPending(o))
+      .map((o) => ({
+        bill: o.bill, table: o.table, time: this.fmt(o.doneSecs ?? o.secs),
+        items: o.items.map((i) => ({
+          qty: i.qty, name: i.name + (i.st === 'c' ? ' (ยกเลิก)' : ''),
+          color: i.st === 'c' ? '#9aa4ad' : '#3a434b',
+          deco: i.st === 'c' ? 'line-through' : 'none'
+        })),
+        undo: () => this.setItems(o.id, (i) => ({ ...i, st: 'p' }))
+      })).reverse();
+    const now = new Date();
+    const hasPrev = page > 0, hasNext = page < pageCount - 1;
+    return {
+      tickets, done,
+      pendingCount: orders.length, doneCount: done.length,
+      noPending: all.length === 0, noDone: done.length === 0,
+      pageNo: page + 1, pageCount, ticketCount: all.length,
+      rangeText: all.length ? (page * PAGE + 1) + '–' + (page * PAGE + slice.length) : '0',
+      prev: () => this.setState({ page: Math.max(0, page - 1) }),
+      next: () => this.setState({ page: Math.min(pageCount - 1, page + 1) }),
+      prevBorder: hasPrev ? '#1b1f23' : '#dfe3e7', prevFg: hasPrev ? '#1b1f23' : '#9aa4ad',
+      nextBorder: hasNext ? '#1b1f23' : '#dfe3e7', nextBg: hasNext ? '#1b1f23' : '#ffffff', nextFg: hasNext ? '#ffffff' : '#9aa4ad',
+      lateElsewhere: lateElsewhereN > 0, lateElsewhereN,
+      clock: String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0')
+    };
+  }
+}
+</script>
+</body>
+</html>
