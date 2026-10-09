@@ -3,6 +3,6 @@
   "target": {
     "namespace": "android_app",
     "package_name": "app.vercel.jinko_order.twa",
-    "sha256_cert_fingerprints": ["04:10:4D:88:02:83:05:0B:16:22:CC:BC:4F:5F:15:74:3B:3A:3B:8F:97:86:C3:86:CD:52:86:78:7A:B3:B7:33"]
+    "sha256_cert_fingerprints": ["C6:14:CE:02:2C:06:01:13:F0:24:8E:C3:0D:38:CA:3C:C5:57:FB:E4:F6:4B:4E:9C:6A:5D:DD:B3:A7:4A:40:68"]
   }
 }]
