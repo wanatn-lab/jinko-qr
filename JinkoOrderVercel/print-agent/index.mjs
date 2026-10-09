@@ -18,17 +18,53 @@ function retryableHttpStatus(status) {
 }
 
 // Opening hours: the agent only asks the website for new orders while the shop is open.
-// Default 11:00 (inclusive) - 21:00 (exclusive), Bangkok time. Set "activeHours": null in
-// config.json to keep it running all day.
-const DEFAULT_ACTIVE_HOURS = { start: 11, end: 21, timeZone: 'Asia/Bangkok' };
+// Default 11:20 (inclusive) - 21:00 (exclusive), Bangkok time, closed on Mondays
+// (closedWeekdays uses 0=Sunday ... 1=Monday ... 6=Saturday). On a closed weekday the agent
+// asks /api/shop-status every 5 minutes, so the admin page's "เปิดพิเศษวันนี้" button opens it
+// for that one day. start/end can be "HH:MM" or a whole hour number. Set "activeHours": null
+// in config.json to keep it running all day.
+const DEFAULT_ACTIVE_HOURS = { start: '11:20', end: '21:00', closedWeekdays: [1], timeZone: 'Asia/Bangkok' };
+const WEEKDAYS = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+const SPECIAL_CHECK_FROM_MINUTE = 10 * 60;
 
-export function isWithinActiveHours(config = {}, now = new Date()) {
+function toMinutes(value) {
+  if (typeof value === 'number') return value * 60;
+  const [hours, minutes = '0'] = String(value).split(':');
+  return Number(hours) * 60 + Number(minutes);
+}
+
+function localParts(timeZone, now) {
+  const parts = {};
+  new Intl.DateTimeFormat('en-GB', {
+    timeZone, weekday: 'short', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(now).forEach((part) => { parts[part.type] = part.value; });
+  return {
+    weekday: WEEKDAYS[parts.weekday],
+    date: `${parts.year}-${parts.month}-${parts.day}`,
+    minute: (Number(parts.hour) % 24) * 60 + Number(parts.minute),
+  };
+}
+
+function mergedHours(config) {
+  return { ...DEFAULT_ACTIVE_HOURS, ...(config.activeHours || {}) };
+}
+
+export function isWithinActiveHours(config = {}, now = new Date(), specialOpenDate = null) {
   if (config.activeHours === null) return true;
-  const { start, end, timeZone } = { ...DEFAULT_ACTIVE_HOURS, ...(config.activeHours || {}) };
-  const hour = Number(
-    new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', hour12: false }).format(now)
-  ) % 24;
-  return hour >= start && hour < end;
+  const { start, end, closedWeekdays, timeZone } = mergedHours(config);
+  const p = localParts(timeZone, now);
+  if (p.minute < toMinutes(start) || p.minute >= toMinutes(end)) return false;
+  if ((closedWeekdays || []).includes(p.weekday) && specialOpenDate !== p.date) return false;
+  return true;
+}
+
+// True while it is worth asking the website whether today was switched to a special opening.
+export function shouldCheckSpecialOpen(config = {}, now = new Date()) {
+  if (config.activeHours === null) return false;
+  const { end, closedWeekdays, timeZone } = mergedHours(config);
+  const p = localParts(timeZone, now);
+  return (closedWeekdays || []).includes(p.weekday) && p.minute >= SPECIAL_CHECK_FROM_MINUTE && p.minute < toMinutes(end);
 }
 
 function delay(milliseconds) {
@@ -325,8 +361,20 @@ async function main() {
   console.log('Polling every', localConfig.pollIntervalMs || 4000, 'ms. Press Ctrl+C to stop.\n');
 
   let pausedNotice = false;
+  let specialOpenDate = null;
+  let lastSpecialCheck = 0;
+  const SPECIAL_CHECK_MS = 5 * 60 * 1000;
   const loop = async () => {
-    if (!TEST_MODE && !isWithinActiveHours(localConfig)) {
+    if (!TEST_MODE && shouldCheckSpecialOpen(localConfig) && Date.now() - lastSpecialCheck >= SPECIAL_CHECK_MS) {
+      lastSpecialCheck = Date.now();
+      try {
+        const response = await fetchWithRetry(localConfig.apiBase.replace(/\/$/, '') + '/api/shop-status');
+        specialOpenDate = (await response.json()).specialOpenDate || null;
+      } catch (err) {
+        console.warn('[warn] could not check the special-opening switch:', err.message);
+      }
+    }
+    if (!TEST_MODE && !isWithinActiveHours(localConfig, new Date(), specialOpenDate)) {
       if (!pausedNotice) {
         console.log('Outside shop hours — paused (no requests sent). Resumes automatically.');
         pausedNotice = true;

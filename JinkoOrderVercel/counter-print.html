@@ -172,6 +172,7 @@
   </div>
   <div class="head-right">
     <span class="sdk-pill" id="sdkPill"><span class="dot"></span><span id="sdkPillText">กำลังตรวจสอบ...</span></span>
+    <button class="icon-btn" id="checkQrBtn" style="width:auto;padding:0 12px;font-size:13px">เช็คคิว QR</button>
     <button class="icon-btn" id="openSettings">⚙</button>
   </div>
 </header>
@@ -204,7 +205,7 @@
     </div>
     <div class="field">
       <label>ความถี่เช็คออเดอร์ใหม่ (วินาที)</label>
-      <input type="number" id="fPollSec" min="2" max="30" value="4">
+      <input type="number" id="fPollSec" min="15" max="60" value="15">
     </div>
     <div class="toggle-row">
       <span class="lbl">พิมพ์อัตโนมัติ</span>
@@ -252,7 +253,7 @@ const PRINTED_KEY = "counterPrintPrintedIds";
 const DEFAULT_SETTINGS = {
   category: "เครื่องดื่ม",
   shopName: "จิ๊นโค",
-  pollSec: 4,
+  pollSec: 15,
   autoPrint: true,
 };
 
@@ -608,7 +609,7 @@ document.getElementById("testPrintBtn").onclick = runTestPrint;
 
 document.getElementById("saveSettingsBtn").onclick = () => {
   const newCategory = document.getElementById("fCategory").value.trim() || "เครื่องดื่ม";
-  const newPollSec = Math.max(2, Math.min(30, Number(document.getElementById("fPollSec").value) || 4));
+  const newPollSec = Math.max(15, Math.min(60, Number(document.getElementById("fPollSec").value) || 15));
   settings = {
     category: newCategory,
     shopName: document.getElementById("fShopName").value.trim() || "ร้าน",
@@ -635,7 +636,7 @@ function showToast(msg) {
 /* ---------------- Init ---------------- */
 function restartPolling() {
   if (pollTimer) clearInterval(pollTimer);
-  pollTimer = setInterval(function(){ if (window.isShopOpen()) pollOrders(); }, Math.max(2, settings.pollSec) * 1000); // หยุดดึงอัตโนมัตินอกเวลา 11:00-21:00
+  pollTimer = setInterval(function(){ if (window.isShopOpen()) pollOrders(); }, Math.max(15, settings.pollSec) * 1000); // หยุดดึงอัตโนมัตินอกเวลา 11:00-21:00
 }
 
 async function init() {
@@ -654,7 +655,6 @@ init();
    - ใช้คิวแยก /api/qr-print-jobs (ไม่ปนกับ /api/orders)
    - ไม่ใช่เครื่อง iMin => ไม่ทำอะไร และงานยังค้างในคิวรอเครื่องที่ถูกต้อง */
 (function () {
-  const QR_POLL_MS = 4000;
   const MAX_ATTEMPTS = 3;
   const donePrinting = new Set(); // job id ที่พิมพ์แล้วในหน้านี้
   const attempts = {};
@@ -715,8 +715,13 @@ init();
     }
   }
 
+  // QR jobs are not polled automatically (they are rare). They are checked once when this
+  // page opens and whenever the "เช็คคิว QR" button is pressed.
   pollQrJobs();
-  setInterval(function(){ if (window.isShopOpen()) pollQrJobs(); }, QR_POLL_MS); // หยุดดึงอัตโนมัตินอกเวลา 11:00-21:00
+  document.getElementById("checkQrBtn").addEventListener("click", async function () {
+    await pollQrJobs();
+    showToast("เช็คคิว QR แล้ว");
+  });
 })();
 </script>
 </body>
