@@ -30,11 +30,11 @@ test("cancelled add-on does not trigger blue", () => {
   assert.equal(cardTimes(card).lastAddMs, null);
 });
 
-test("clock format and ticket splitting", () => {
+test("clock format and one ticket per card", () => {
   assert.equal(fmtClock(65), "01:05");
   const card = { key: "1|0", items: Array.from({ length: 13 }, (_, i) => ({ lineId: "l" + i })) };
-  const tickets = toTickets([card], 6);
-  assert.deepEqual(tickets.map((t) => [t.part, t.parts, t.items.length]), [[1, 3, 6], [2, 3, 6], [3, 3, 1]]);
+  const tickets = toTickets([card]);
+  assert.deepEqual(tickets.map((t) => [t.parts, t.items.length]), [[1, 13]]);
 });
 
 test("sort: rush, then rank, then longest wait", () => {
