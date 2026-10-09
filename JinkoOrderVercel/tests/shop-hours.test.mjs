@@ -57,3 +57,12 @@ test("Bangkok weekday is used, not the server's", () => {
   assert.equal(window.shopDayInfo(new Date("2026-10-11T23:30:00Z")).closedDay, true);
   assert.equal(window.shopDayInfo(new Date("2026-10-12T17:30:00Z")).closedDay, false);
 });
+
+test("closed notice explains why auto refresh is off, and is empty while open", () => {
+  const { window } = loadShopHours();
+  assert.equal(window.shopClosedNotice(bkk("2026-10-13T14:00:00")), "");
+  assert.match(window.shopClosedNotice(bkk("2026-10-13T22:00:00")), /นอกเวลาเปิดร้าน/);
+  assert.match(window.shopClosedNotice(bkk("2026-10-12T14:00:00")), /วันจันทร์/);
+  window.setShopSpecialOpenDate("2026-10-12");
+  assert.equal(window.shopClosedNotice(bkk("2026-10-12T14:00:00")), "");
+});
