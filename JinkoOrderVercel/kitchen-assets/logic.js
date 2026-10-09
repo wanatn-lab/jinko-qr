@@ -54,23 +54,17 @@ export function sortCards(cards) {
   );
 }
 
-// Long orders are cut into several tickets (ใบ 1/2 ...), same time + colour for all parts.
-export function toTickets(cards, perTicket) {
-  const tickets = [];
-  for (const card of cards) {
-    const parts = Math.max(1, Math.ceil(card.items.length / perTicket));
-    for (let p = 0; p < parts; p++) {
-      tickets.push({
-        key: `${card.key}#${p}`,
-        cardKey: card.key,
-        part: p + 1,
-        parts,
-        card,
-        items: card.items.slice(p * perTicket, (p + 1) * perTicket),
-      });
-    }
-  }
-  return tickets;
+// One table = one ticket, however long. Long orders scroll inside the card
+// (a new card appears only when a new table/session starts).
+export function toTickets(cards) {
+  return cards.map((card) => ({
+    key: `${card.key}#0`,
+    cardKey: card.key,
+    part: 1,
+    parts: 1,
+    card,
+    items: card.items,
+  }));
 }
 
 // ---- store: server data + optimistic edits + polling -------------------------
