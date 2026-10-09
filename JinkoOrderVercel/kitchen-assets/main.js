@@ -8,7 +8,6 @@ async function request(path, options) {
   const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
   try {
     const res = await fetch(path, { cache: "no-store", ...options, signal: ctrl.signal });
-    if (res.status === 410) { store.stop && store.stop(); throw new Error("kitchen screen is turned off"); }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return await res.json();
   } finally {

@@ -7,7 +7,6 @@
 <link rel="stylesheet" href="/style.css">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@400;500;600;700&family=Noto+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet">
-<script src="/shop-hours.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/browser-image-compression@2.0.2/dist/browser-image-compression.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
@@ -1886,7 +1885,7 @@ async function rcSaveSettings() {
 loadMenu();
 loadSettings().then(() => {
   pollPrinterStatus();
-  setInterval(function(){ if (window.isShopOpen()) pollPrinterStatus(); }, 5000); // หยุดดึงอัตโนมัตินอกเวลา 11:00-21:00
+  setInterval(pollPrinterStatus, 5000);
   rcLoadSettings();
 });
 </script>
@@ -2393,7 +2392,7 @@ async function init(){
     return;
   }
   renderAll();
-  pollTimer = setInterval(function(){ if (window.isShopOpen()) refreshAll(); }, REFRESH_MS); // หยุดดึงอัตโนมัตินอกเวลา 11:00-21:00
+  pollTimer = setInterval(refreshAll, REFRESH_MS);
 }
 init();
 

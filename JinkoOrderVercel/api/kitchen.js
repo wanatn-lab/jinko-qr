@@ -129,16 +129,4 @@ export function createKitchenHandler({ redis = defaultRedis, now = () => new Dat
   };
 }
 
-// The kitchen screen is switched off for now (the code is kept). While KITCHEN_ENABLED is not
-// "true", this endpoint answers immediately WITHOUT touching Redis, so any old tablet that is
-// still open cannot use up the database quota. To turn the screen back on: set the Vercel
-// environment variable KITCHEN_ENABLED=true and restore the /kitchen rewrite in vercel.json.
-const kitchenHandler = createKitchenHandler();
-
-export default function kitchenGate(req, res) {
-  if (process.env.KITCHEN_ENABLED !== "true") {
-    res.setHeader("Cache-Control", "no-store");
-    return res.status(410).json({ ok: false, error: "kitchen screen is turned off" });
-  }
-  return kitchenHandler(req, res);
-}
+export default createKitchenHandler();

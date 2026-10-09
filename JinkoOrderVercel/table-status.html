@@ -515,7 +515,6 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="/shop-hours.js"></script>
 <script>
 /* ---------------- Config ---------------- */
 const REFRESH_MS = 5000;
@@ -998,7 +997,7 @@ async function init(){
     return;
   }
   renderAll();
-  pollTimer = setInterval(function(){ if (window.isShopOpen()) refreshAll(); }, REFRESH_MS); // หยุดดึงอัตโนมัตินอกเวลา 11:00-21:00
+  pollTimer = setInterval(refreshAll, REFRESH_MS);
 }
 init();
 </script>
