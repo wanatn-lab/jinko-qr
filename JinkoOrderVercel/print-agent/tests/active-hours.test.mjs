@@ -1,26 +1,43 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { isWithinActiveHours } from '../index.mjs';
+import { isWithinActiveHours, shouldCheckSpecialOpen } from '../index.mjs';
 
-// Bangkok is UTC+7, so 11:00 Bangkok = 04:00 UTC and 21:00 Bangkok = 14:00 UTC.
-const at = (isoUtc) => new Date(isoUtc);
+// Bangkok is UTC+7. 2026-10-13 is a Tuesday, 2026-10-12 a Monday.
+const at = (isoBangkok) => new Date(isoBangkok + '+07:00');
 
-test('open from 11:00 up to (not including) 21:00 Bangkok time', () => {
+test('open from 11:20 up to (not including) 21:00 Bangkok time', () => {
   const config = {};
-  assert.equal(isWithinActiveHours(config, at('2026-10-09T03:59:00Z')), false); // 10:59
-  assert.equal(isWithinActiveHours(config, at('2026-10-09T04:00:00Z')), true); // 11:00
-  assert.equal(isWithinActiveHours(config, at('2026-10-09T13:59:00Z')), true); // 20:59
-  assert.equal(isWithinActiveHours(config, at('2026-10-09T14:00:00Z')), false); // 21:00
-  assert.equal(isWithinActiveHours(config, at('2026-10-09T17:00:00Z')), false); // 00:00 next day
+  assert.equal(isWithinActiveHours(config, at('2026-10-13T11:19:00')), false);
+  assert.equal(isWithinActiveHours(config, at('2026-10-13T11:20:00')), true);
+  assert.equal(isWithinActiveHours(config, at('2026-10-13T20:59:00')), true);
+  assert.equal(isWithinActiveHours(config, at('2026-10-13T21:00:00')), false);
+  assert.equal(isWithinActiveHours(config, at('2026-10-14T00:00:00')), false);
 });
 
-test('custom hours from config.json are respected', () => {
-  const config = { activeHours: { start: 9, end: 22, timeZone: 'Asia/Bangkok' } };
-  assert.equal(isWithinActiveHours(config, at('2026-10-09T02:00:00Z')), true); // 09:00
-  assert.equal(isWithinActiveHours(config, at('2026-10-09T15:00:00Z')), false); // 22:00
+test('Monday is closed unless that date was switched to a special opening', () => {
+  const config = {};
+  assert.equal(isWithinActiveHours(config, at('2026-10-12T15:00:00')), false);
+  assert.equal(isWithinActiveHours(config, at('2026-10-12T15:00:00'), '2026-10-12'), true);
+  assert.equal(isWithinActiveHours(config, at('2026-10-12T11:19:00'), '2026-10-12'), false); // hours still apply
+  assert.equal(isWithinActiveHours(config, at('2026-10-19T15:00:00'), '2026-10-12'), false); // next Monday
+});
+
+test('custom hours and closed days from config.json are respected (hour numbers still work)', () => {
+  const config = { activeHours: { start: 9, end: 22, closedWeekdays: [], timeZone: 'Asia/Bangkok' } };
+  assert.equal(isWithinActiveHours(config, at('2026-10-12T09:00:00')), true); // Monday, no closed day
+  assert.equal(isWithinActiveHours(config, at('2026-10-12T22:00:00')), false);
 });
 
 test('activeHours: null keeps the agent running all day', () => {
-  assert.equal(isWithinActiveHours({ activeHours: null }, at('2026-10-09T17:00:00Z')), true);
+  assert.equal(isWithinActiveHours({ activeHours: null }, at('2026-10-12T03:00:00')), true);
+  assert.equal(shouldCheckSpecialOpen({ activeHours: null }, at('2026-10-12T15:00:00')), false);
+});
+
+test('the special-opening check only runs on closed weekdays during the day', () => {
+  assert.equal(shouldCheckSpecialOpen({}, at('2026-10-12T09:59:00')), false);
+  assert.equal(shouldCheckSpecialOpen({}, at('2026-10-12T10:00:00')), true);
+  assert.equal(shouldCheckSpecialOpen({}, at('2026-10-12T20:59:00')), true);
+  assert.equal(shouldCheckSpecialOpen({}, at('2026-10-12T21:00:00')), false);
+  assert.equal(shouldCheckSpecialOpen({}, at('2026-10-13T15:00:00')), false); // Tuesday
 });
