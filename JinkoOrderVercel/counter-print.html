@@ -95,6 +95,7 @@
   .oc-status.printed{background:var(--ok-bg);color:var(--ok-text);}
   .oc-status.pending{background:var(--warn-bg);color:var(--warn-text);}
   .oc-status.failed{background:var(--bad-bg);color:var(--bad-text);}
+  .oc-status.stale{background:#ececec;color:#555;}
   .oc-items{border-top:1px dashed var(--line);border-bottom:1px dashed var(--line);padding:10px 0;margin-bottom:10px;}
   .oc-item{display:flex;justify-content:space-between;gap:8px;font-size:14.5px;padding:3px 0;}
   .oc-item .n{font-weight:600;}
@@ -394,6 +395,15 @@ function extractDrinkItems(order) {
   return (order.items || []).filter(it => (it.category || "").trim() === cat);
 }
 
+// Orders older than this are NOT printed automatically (e.g. an order that came in after the page
+// stopped polling at closing time, or tickets left over when the page is opened much later).
+// They stay in the queue marked "เก่า" and can still be printed by hand with the reprint button.
+const STALE_PRINT_MS = 60 * 60 * 1000;
+function isStaleOrder(order) {
+  const created = new Date(order.createdAt).getTime();
+  return Number.isFinite(created) && Date.now() - created > STALE_PRINT_MS;
+}
+
 async function pollOrders() {
   try {
     const res = await fetch('/api/orders');
@@ -419,7 +429,7 @@ async function pollOrders() {
     // สั่งพิมพ์อัตโนมัติเฉพาะออเดอร์ที่ยังไม่เคยพิมพ์สำเร็จ
     if (settings.autoPrint) {
       for (const order of withDrinks) {
-        if (!printedIds.has(order.id) && (failedAttempts[order.id] || 0) < 5) {
+        if (!printedIds.has(order.id) && (failedAttempts[order.id] || 0) < 5 && !isStaleOrder(order)) {
           await tryPrint(order, { silent: true });
         }
       }
@@ -444,7 +454,9 @@ function renderQueue(prevIds, isFirstLoad) {
       ? { cls: "printed", label: "พิมพ์แล้ว" }
       : (failedAttempts[order.id] >= 5
           ? { cls: "failed", label: "พิมพ์ไม่สำเร็จ — กดพิมพ์ซ้ำ" }
-          : { cls: "pending", label: "รอพิมพ์" });
+          : (isStaleOrder(order)
+              ? { cls: "stale", label: "เก่าเกิน 60 นาที — ไม่พิมพ์อัตโนมัติ (กดพิมพ์ซ้ำได้)" }
+              : { cls: "pending", label: "รอพิมพ์" }));
 
     const card = document.createElement("div");
     card.className = "order-card" + (isNew ? " new-flash" : "");
