@@ -40,7 +40,7 @@ body {
 }
 .qty-row .qty-num { min-width: 20px; text-align: center; font-weight: 600; }
 .cart-bar {
-  position: fixed; bottom: 0; left: 0; right: 0; z-index: 30;
+  position: fixed; bottom: 0; left: 0; right: 0;
   background: #3B2A20; color: #fff;
   padding: 14px 16px;
   display: flex; align-items: center; justify-content: space-between;
