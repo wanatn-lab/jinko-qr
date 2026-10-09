@@ -230,6 +230,7 @@
   (https://mp.imin.sg/JSPrinter/index.html) — ถ้าอุปกรณ์ไม่มีอินเทอร์เน็ต หรือโดเมนนี้เข้าไม่ได้
   สคริปต์จะโหลดไม่สำเร็จ แต่หน้านี้จะยังทำงานต่อได้ปกติ (แค่พิมพ์อัตโนมัติไม่ได้)
 -->
+<script src="/shop-hours.js"></script>
 <script src="https://mp.imin.sg/JSPrinter/imin-printer.js?v=20261003-4"></script>
 <script>
 /* ============================================================
@@ -634,7 +635,7 @@ function showToast(msg) {
 /* ---------------- Init ---------------- */
 function restartPolling() {
   if (pollTimer) clearInterval(pollTimer);
-  pollTimer = setInterval(pollOrders, Math.max(2, settings.pollSec) * 1000);
+  pollTimer = setInterval(function(){ if (window.isShopOpen()) pollOrders(); }, Math.max(2, settings.pollSec) * 1000); // หยุดดึงอัตโนมัตินอกเวลา 11:00-21:00
 }
 
 async function init() {
@@ -715,7 +716,7 @@ init();
   }
 
   pollQrJobs();
-  setInterval(pollQrJobs, QR_POLL_MS);
+  setInterval(function(){ if (window.isShopOpen()) pollQrJobs(); }, QR_POLL_MS); // หยุดดึงอัตโนมัตินอกเวลา 11:00-21:00
 })();
 </script>
 </body>

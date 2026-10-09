@@ -17,6 +17,20 @@ function retryableHttpStatus(status) {
   return status === 408 || status === 425 || status === 429 || status >= 500;
 }
 
+// Opening hours: the agent only asks the website for new orders while the shop is open.
+// Default 11:00 (inclusive) - 21:00 (exclusive), Bangkok time. Set "activeHours": null in
+// config.json to keep it running all day.
+const DEFAULT_ACTIVE_HOURS = { start: 11, end: 21, timeZone: 'Asia/Bangkok' };
+
+export function isWithinActiveHours(config = {}, now = new Date()) {
+  if (config.activeHours === null) return true;
+  const { start, end, timeZone } = { ...DEFAULT_ACTIVE_HOURS, ...(config.activeHours || {}) };
+  const hour = Number(
+    new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', hour12: false }).format(now)
+  ) % 24;
+  return hour >= start && hour < end;
+}
+
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
@@ -310,7 +324,16 @@ async function main() {
     : 'Mode: LIVE — printer list / paper size are read from the admin website each cycle.');
   console.log('Polling every', localConfig.pollIntervalMs || 4000, 'ms. Press Ctrl+C to stop.\n');
 
+  let pausedNotice = false;
   const loop = async () => {
+    if (!TEST_MODE && !isWithinActiveHours(localConfig)) {
+      if (!pausedNotice) {
+        console.log('Outside shop hours — paused (no requests sent). Resumes automatically.');
+        pausedNotice = true;
+      }
+      return;
+    }
+    pausedNotice = false;
     try {
       const n = await pollOnce(localConfig, printed);
       if (n > 0) console.log(`— printed ${n} new order(s) —`);
