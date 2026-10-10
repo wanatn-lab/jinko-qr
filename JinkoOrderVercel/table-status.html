@@ -575,7 +575,7 @@ async function loadMenu(){
 }
 
 async function loadTables(){
-  const res = await fetch('/api/table-status');
+  const res = await fetch('/api/table-status', { headers: { 'X-Jinko-Client': '2' } });
   const data = await res.json();
   TABLES = (data.tables || []).map(t=>({
     id: t.table,
