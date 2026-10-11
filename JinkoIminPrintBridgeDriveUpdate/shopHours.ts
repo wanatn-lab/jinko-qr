@@ -1,7 +1,7 @@
 export const DEFAULT_POLL_SECONDS = 6;
 export const OPEN_MINUTE = 11 * 60 + 20;
 export const CLOSE_MINUTE = 21 * 60;
-export const CLOSE_GRACE_MINUTES = 2;
+export const CLOSE_GRACE_MINUTES = 60;
 export const SPECIAL_CHECK_FROM_MINUTE = 10 * 60;
 export const SPECIAL_CHECK_INTERVAL_MS = 5 * 60 * 1000;
 
@@ -55,7 +55,7 @@ export function isShopOpen(
   );
 }
 
-/** Allows a final two-minute drain window for orders accepted just before closing. */
+/** Allows a final one-hour drain window for orders accepted just before closing. */
 export function canPollOrders(
   date: Date = new Date(),
   specialOpenDate: string | null = null,

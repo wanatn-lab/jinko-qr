@@ -10,7 +10,7 @@ final class ShopHours {
   private static final TimeZone BANGKOK_FIXED = TimeZone.getTimeZone("GMT+07:00");
   private static final int OPEN_MINUTE = 11 * 60 + 20;
   private static final int CLOSE_MINUTE = 21 * 60;
-  private static final int CLOSE_GRACE_MINUTES = 2;
+  private static final int CLOSE_GRACE_MINUTES = 60;
   private static final int SPECIAL_FROM_MINUTE = 10 * 60;
   private static final long SPECIAL_CHECK_INTERVAL_MS = 5 * 60 * 1000L;
 

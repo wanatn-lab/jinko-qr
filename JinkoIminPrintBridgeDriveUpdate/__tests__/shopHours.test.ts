@@ -15,8 +15,8 @@ test.each([
   ['11:20', true],
   ['20:59', true],
   ['21:00', true],
-  ['21:01', true],
-  ['21:02', false],
+  ['21:59', true],
+  ['22:00', false],
 ])('poll policy at %s is %s', (time, allowed) => {
   expect(canPollOrders(bangkok(`2026-10-11T${time}:00`))).toBe(allowed);
 });
@@ -26,6 +26,44 @@ test('Monday is closed unless the current Bangkok date is specially opened', () 
   expect(isShopOpen(monday)).toBe(false);
   expect(isShopOpen(monday, '2026-10-12')).toBe(true);
   expect(canPollOrders(monday, '2026-10-12')).toBe(true);
+});
+
+test.each(['21:00', '21:59'])(
+  'Monday drain at %s requires special opening',
+  time => {
+    const monday = bangkok(`2026-10-12T${time}:00`);
+    expect(canPollOrders(monday)).toBe(false);
+    expect(canPollOrders(monday, '2026-10-12')).toBe(true);
+    expect(canPollOrders(monday, '2026-10-05')).toBe(false);
+    expect(isShopOpen(monday, '2026-10-12')).toBe(false);
+  },
+);
+
+test.each(['21:00', '21:59', '22:00'])(
+  'printer-status hours exclude %s',
+  time => {
+    expect(isShopOpen(bangkok(`2026-10-11T${time}:00`))).toBe(false);
+  },
+);
+
+test.each([
+  ['21:00', true],
+  ['21:59', true],
+  ['22:00', false],
+])('queue fetch boundary at %s is %s', async (time, allowed) => {
+  const fetchOrders = jest.fn<() => Promise<unknown>>().mockResolvedValue([]);
+  const fetchPrintJobs = jest
+    .fn<() => Promise<unknown>>()
+    .mockResolvedValue({jobs: []});
+  expect(
+    await pollShopEndpoints({
+      date: bangkok(`2026-10-11T${time}:00`),
+      fetchOrders,
+      fetchPrintJobs,
+    }),
+  ).toBe(allowed);
+  expect(fetchOrders).toHaveBeenCalledTimes(allowed ? 1 : 0);
+  expect(fetchPrintJobs).toHaveBeenCalledTimes(allowed ? 1 : 0);
 });
 
 test('does not carry opening hours across midnight', () => {
