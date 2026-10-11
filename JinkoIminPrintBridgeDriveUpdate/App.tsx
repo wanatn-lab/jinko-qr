@@ -422,6 +422,7 @@ function App(): JSX.Element {
   );
   const [lastSync, setLastSync] = useState('ยังไม่ซิงก์');
   const [notice, setNotice] = useState('กำลังเปิดระบบ…');
+  const [manualNotice, setManualNotice] = useState('');
   const [ready, setReady] = useState(false);
   const [appIsActive, setAppIsActive] = useState(
     AppState.currentState === 'active',
@@ -778,7 +779,7 @@ function App(): JSX.Element {
   );
 
   const pollOrders = useCallback(
-    async (overrideSettings?: Settings) => {
+    async (overrideSettings?: Settings, options: {manual?: boolean} = {}) => {
       if (pollingRef.current) {
         return;
       }
@@ -786,11 +787,23 @@ function App(): JSX.Element {
       setSyncing(true);
       const activeSettings = overrideSettings || settingsRef.current;
       try {
-        await syncSpecialOpen(activeSettings);
-        if (!canPollOrders(new Date(), specialOpenDateRef.current)) {
+        // Only an explicit button press bypasses hours, for this invocation alone.
+        // Timers, startup and settings saves retain the automatic hours gate.
+        if (!options.manual) {
+          await syncSpecialOpen(activeSettings);
+        }
+        if (
+          !options.manual &&
+          !canPollOrders(new Date(), specialOpenDateRef.current)
+        ) {
           setNotice(shopClosedNotice(new Date(), specialOpenDateRef.current));
           return;
         }
+        setManualNotice(
+          options.manual && !isShopOpen(new Date(), specialOpenDateRef.current)
+            ? 'ดึงมือนอกเวลาเปิดร้าน'
+            : '',
+        );
         await loadPaperWidth(activeSettings);
         const response = await fetch(
           `${normaliseBaseUrl(activeSettings.apiBaseUrl)}/api/orders`,
@@ -1083,7 +1096,7 @@ function App(): JSX.Element {
             printedRef.current = new Set();
             setPrinted(new Set());
             setNotice('ล้างประวัติแล้ว — กำลังตรวจคิวเพื่อพิมพ์ใหม่');
-            await pollOrders();
+            await pollOrders(undefined, {manual: true});
           },
         },
       ],
@@ -1131,6 +1144,9 @@ function App(): JSX.Element {
 
         <View style={styles.notice}>
           <Text style={styles.noticeText}>{notice}</Text>
+          {!!manualNotice && (
+            <Text style={styles.noticeText}>{manualNotice}</Text>
+          )}
           {!!shopClosedNotice(new Date(), specialOpenDate) && (
             <Text style={styles.closedNoticeText}>
               {shopClosedNotice(new Date(), specialOpenDate)}
@@ -1147,7 +1163,7 @@ function App(): JSX.Element {
           <Pressable
             style={[styles.primaryButton, syncing && styles.buttonDisabled]}
             disabled={syncing}
-            onPress={() => pollOrders()}>
+            onPress={() => pollOrders(undefined, {manual: true})}>
             <Text style={styles.primaryButtonText}>
               {syncing ? 'กำลังซิงก์…' : 'ซิงก์ตอนนี้'}
             </Text>
