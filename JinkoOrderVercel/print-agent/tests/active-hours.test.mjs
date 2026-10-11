@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { createPrinterStatusReporter, createSettingsCache, isWithinActiveHours, shouldCheckSpecialOpen } from '../index.mjs';
+import { createPrinterStatusReporter, createSettingsCache, isWithinActiveHours, orderPollIntervalMs, shouldCheckSpecialOpen } from '../index.mjs';
+
+test('order polling falls back to six seconds when config omits pollIntervalMs', () => {
+  assert.equal(orderPollIntervalMs({}), 6000);
+  assert.equal(orderPollIntervalMs({ pollIntervalMs: 7500 }), 7500);
+});
 
 // Bangkok is UTC+7. 2026-10-13 is a Tuesday, 2026-10-12 a Monday.
 const at = (isoBangkok) => new Date(isoBangkok + '+07:00');
@@ -94,15 +99,15 @@ test('printer status posts on first report, changes, print result, and 60-second
     post: async (payload) => { sent.push(payload); },
   });
   await reporter.reportIfNeeded([printer]);
-  clock = 4000;
+  clock = 6000;
   await reporter.reportIfNeeded([printer]);
   reachable = false;
-  clock = 8000;
+  clock = 12000;
   await reporter.reportIfNeeded([printer]);
   reporter.recordPrintResult(printer, false, 'printer write failed');
-  clock = 9000;
+  clock = 13000;
   await reporter.reportIfNeeded([printer]);
-  clock = 69000;
+  clock = 73000;
   await reporter.reportIfNeeded([printer]);
 
   assert.equal(sent.length, 4);

@@ -14,8 +14,13 @@ const PRINTED_PATH = path.join(__dirname, 'printed.json');
 const TEST_MODE = process.argv.includes('--test');
 const HTTP_MAX_ATTEMPTS = 3;
 const HTTP_RETRY_DELAY_MS = 500;
+export const DEFAULT_ORDER_POLL_INTERVAL_MS = 6 * 1000;
 const DEFAULT_SETTINGS_REFRESH_MS = 5 * 60 * 1000;
 const DEFAULT_STATUS_HEARTBEAT_MS = 60 * 1000;
+
+export function orderPollIntervalMs(config = {}) {
+  return Number(config.pollIntervalMs) || DEFAULT_ORDER_POLL_INTERVAL_MS;
+}
 
 function retryableHttpStatus(status) {
   return status === 408 || status === 425 || status === 429 || status >= 500;
@@ -146,7 +151,7 @@ function mergeConfig(localConfig, remote) {
   return merged;
 }
 
-// Settings used to be fetched on every 4-second order poll. Keep a copy in
+// Settings used to be fetched on every 6-second order poll. Keep a copy in
 // memory instead: it is refreshed at startup and then at a configurable
 // interval. A failed refresh deliberately leaves the last known-good values
 // in place, so an intermittent settings request can never stop order printing.
@@ -487,7 +492,7 @@ async function main() {
   console.log(TEST_MODE
     ? 'Mode: TEST — tickets are saved as PNG files in ./test-output, nothing is sent to a printer.'
     : `Mode: LIVE — settings refresh every ${Math.round(settingsCache.refreshMs / 1000)}s; printer status heartbeat every ${Math.round((localConfig.printerStatusHeartbeatMs || DEFAULT_STATUS_HEARTBEAT_MS) / 1000)}s.`);
-  console.log('Polling every', localConfig.pollIntervalMs || 4000, 'ms. Press Ctrl+C to stop.\n');
+  console.log('Polling every', orderPollIntervalMs(localConfig), 'ms. Press Ctrl+C to stop.\n');
 
   let pausedNotice = false;
   let specialOpenDate = null;
@@ -512,7 +517,7 @@ async function main() {
     }
     pausedNotice = false;
     // Refresh in the background. The current cached configuration is used for
-    // this 4-second poll, so a slow settings endpoint never delays printing.
+    // this 6-second poll, so a slow settings endpoint never delays printing.
     settingsCache.refresh().catch(() => {});
     try {
       const n = await pollOnce(settingsCache.config(), printed, statusReporter);
@@ -523,7 +528,7 @@ async function main() {
   };
 
   await loop();
-  setInterval(loop, localConfig.pollIntervalMs || 4000);
+  setInterval(loop, orderPollIntervalMs(localConfig));
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

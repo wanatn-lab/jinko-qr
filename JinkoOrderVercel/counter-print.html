@@ -206,7 +206,8 @@
     </div>
     <div class="field">
       <label>ความถี่เช็คออเดอร์ใหม่ (วินาที)</label>
-      <input type="number" id="fPollSec" min="15" max="60" value="15">
+      <input type="number" id="fPollSec" min="20" max="60" value="20">
+      <div class="hint">ตั้งได้ 20–60 วินาที</div>
     </div>
     <div class="toggle-row">
       <span class="lbl">พิมพ์อัตโนมัติ</span>
@@ -254,7 +255,7 @@ const PRINTED_KEY = "counterPrintPrintedIds";
 const DEFAULT_SETTINGS = {
   category: "เครื่องดื่ม",
   shopName: "จิ๊นโค",
-  pollSec: 15,
+  pollSec: 20,
   autoPrint: true,
 };
 
@@ -269,7 +270,15 @@ let pollTimer = null;
 function loadSettings() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? { ...DEFAULT_SETTINGS, ...JSON.parse(raw) } : { ...DEFAULT_SETTINGS };
+    if (!raw) return { ...DEFAULT_SETTINGS };
+    const saved = JSON.parse(raw);
+    return {
+      ...DEFAULT_SETTINGS,
+      ...saved,
+      // Existing browsers can have the former 15-second minimum saved.
+      // Raise it immediately so every subsequent timer uses the new minimum.
+      pollSec: Math.min(60, Math.max(20, Number(saved.pollSec) || DEFAULT_SETTINGS.pollSec)),
+    };
   } catch { return { ...DEFAULT_SETTINGS }; }
 }
 function saveSettings() {
@@ -621,7 +630,7 @@ document.getElementById("testPrintBtn").onclick = runTestPrint;
 
 document.getElementById("saveSettingsBtn").onclick = () => {
   const newCategory = document.getElementById("fCategory").value.trim() || "เครื่องดื่ม";
-  const newPollSec = Math.max(15, Math.min(60, Number(document.getElementById("fPollSec").value) || 15));
+  const newPollSec = Math.max(20, Math.min(60, Number(document.getElementById("fPollSec").value) || 20));
   settings = {
     category: newCategory,
     shopName: document.getElementById("fShopName").value.trim() || "ร้าน",
@@ -648,7 +657,7 @@ function showToast(msg) {
 /* ---------------- Init ---------------- */
 function restartPolling() {
   if (pollTimer) clearInterval(pollTimer);
-  pollTimer = setInterval(function(){ if (window.isShopOpen()) pollOrders(); }, Math.max(15, settings.pollSec) * 1000); // หยุดดึงอัตโนมัตินอกเวลา 11:00-21:00
+  pollTimer = setInterval(function(){ if (window.isShopOpen()) pollOrders(); }, Math.max(20, settings.pollSec) * 1000); // หยุดดึงอัตโนมัตินอกเวลา 11:00-21:00
 }
 
 async function init() {
