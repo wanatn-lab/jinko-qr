@@ -74,6 +74,10 @@ public final class OrderPollingService extends Service {
   private SharedPreferences preferences;
   private IminPrintUtils internalPrinter;
   private boolean internalPrinterInitialized;
+  private String specialOpenDate;
+  private long lastSpecialCheckAt;
+  private long lastPrinterStatusAt;
+  private String lastPrinterStatusSignature;
 
   static void start(Context context) {
     SharedPreferences preferences = context.getSharedPreferences(PrintHistory.PREFS, MODE_PRIVATE);
@@ -127,7 +131,7 @@ public final class OrderPollingService extends Service {
 
   private void schedulePolling() {
     if (pollingTask != null && !pollingTask.isCancelled()) return;
-    int seconds = Math.max(2, Math.min(30, preferences.getInt("pollSeconds", 4)));
+    int seconds = Math.max(2, Math.min(30, preferences.getInt("pollSeconds", 6)));
     pollingTask = worker.scheduleWithFixedDelay(new Runnable() {
       @Override
       public void run() {
@@ -149,6 +153,11 @@ public final class OrderPollingService extends Service {
     }
     try {
       String baseUrl = normaliseBaseUrl(preferences.getString("apiBaseUrl", "https://jinko-order.vercel.app"));
+      syncSpecialOpen(baseUrl);
+      if (!ShopHours.canPollOrders(new Date(), specialOpenDate)) {
+        updateNotification("นอกเวลาเปิดร้าน หยุดดึงออเดอร์");
+        return;
+      }
       // The foreground React screen is paused while this service owns printing.
       // Fetch the full settings object here as well, not just the paper width;
       // older queued jobs may not contain their own receiptConfig snapshot.
@@ -245,6 +254,7 @@ public final class OrderPollingService extends Service {
           lastFailure = error.getMessage();
         }
       }
+      reportPrinterStatus(baseUrl);
       if (lastFailure != null) {
         updateNotification("พิมพ์ไม่สำเร็จ: " + lastFailure);
       } else if (printedNow > 0) {
@@ -419,6 +429,60 @@ public final class OrderPollingService extends Service {
       }
     });
     return receipts;
+  }
+
+  private void syncSpecialOpen(String baseUrl) {
+    Date now = new Date();
+    if (!ShopHours.isSpecialCheckDue(now, lastSpecialCheckAt)) return;
+    lastSpecialCheckAt = now.getTime();
+    try {
+      JSONObject status = fetchObject(baseUrl + "/api/shop-status");
+      String next = status.optString("specialOpenDate", "").trim();
+      specialOpenDate = next.isEmpty() ? null : next;
+    } catch (Exception ignored) {
+      // Keep the last known special-opening value; status checks are best effort.
+    }
+  }
+
+  private void reportPrinterStatus(String baseUrl) {
+    if (!ShopHours.isShopOpen(new Date(), specialOpenDate)) return;
+    boolean ready = false;
+    String error = "ยังไม่ได้ตรวจสอบเครื่องพิมพ์";
+    if (internalPrinterInitialized) {
+      try {
+        int code = internalPrinter.getPrinterStatus(IminPrintUtils.PrintConnectType.USB);
+        ready = code == 0 || code == 8;
+        error = ready ? null : "iMin status " + code;
+      } catch (Exception statusError) {
+        error = statusError.getMessage();
+      }
+    }
+    String signature = ready + ":" + String.valueOf(error);
+    if (signature.equals(lastPrinterStatusSignature)
+        && System.currentTimeMillis() - lastPrinterStatusAt < 60 * 1000L) return;
+    try {
+      JSONObject printer = new JSONObject();
+      printer.put("id", "imin");
+      printer.put("name", "iMin USB");
+      printer.put("ip", "usb");
+      printer.put("port", 0);
+      printer.put("ok", ready);
+      printer.put("error", error == null ? JSONObject.NULL : error);
+      printer.put("latencyMs", JSONObject.NULL);
+      JSONArray printers = new JSONArray();
+      printers.put(printer);
+      JSONObject payload = new JSONObject();
+      payload.put("instanceId", deviceId());
+      payload.put("hostname", Build.MANUFACTURER + " " + Build.MODEL);
+      payload.put("printers", printers);
+      JSONObject response = postJson(baseUrl + "/api/printer-status", payload);
+      if (response.optBoolean("ok", false)) {
+        lastPrinterStatusSignature = signature;
+        lastPrinterStatusAt = System.currentTimeMillis();
+      }
+    } catch (Exception ignored) {
+      // Reporting must never interrupt or roll back a print.
+    }
   }
 
   private JSONObject loadServerSettings(String baseUrl) {
