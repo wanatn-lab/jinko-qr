@@ -20,6 +20,7 @@ import {
   isSpecialCheckDue,
   shopClosedNotice,
 } from './shopHours';
+import {createSettingsCache} from './settingsCache';
 
 type PrinterMode = 'imin' | 'network' | 'bluetooth';
 
@@ -125,6 +126,7 @@ type IminPrinterModule = {
   getSettings(): Promise<Settings>;
   saveSettings(settings: Settings): Promise<Settings>;
   getDeviceId(): Promise<string>;
+  requestSettingsRefresh(): Promise<void>;
   getDeviceName(): Promise<string>;
   getPrintedKeys(): Promise<string[]>;
   claimPrint(key: string): Promise<boolean>;
@@ -444,6 +446,9 @@ function App(): JSX.Element {
   // successful fetch so a startup receipt still prints (with defaults) rather
   // than crashing.
   const receiptConfigRef = useRef<ReceiptConfig | null>(null);
+  const remoteSettingsCacheRef = useRef(
+    createSettingsCache<{paperWidthMm?: unknown; receipt?: ReceiptConfig}>(),
+  );
   const deviceIdRef = useRef<string | null>(null);
   const deviceNameRef = useRef<string | null>(null);
   const specialOpenDateRef = useRef<string | null>(null);
@@ -594,27 +599,48 @@ function App(): JSX.Element {
     [deviceId, deviceName, internalStatus],
   );
 
-  const loadPaperWidth = useCallback(async (activeSettings: Settings) => {
-    try {
-      const response = await fetch(
-        `${normaliseBaseUrl(activeSettings.apiBaseUrl)}/api/settings`,
-      );
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+  const loadPaperWidth = useCallback(
+    async (activeSettings: Settings, force = false) => {
+      if (force) {
+        try {
+          // Notify the separate service cache; this does not trigger order polling.
+          await IminPrinter.requestSettingsRefresh();
+        } catch {
+          // A refresh notification failure must not block this print round.
+        }
       }
-      const serverSettings = await response.json();
+      const serverSettings = await remoteSettingsCacheRef.current.refresh(
+        async () => {
+          const response = await fetch(
+            `${normaliseBaseUrl(activeSettings.apiBaseUrl)}/api/settings`,
+          );
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+          const payload = await response.json();
+          if (
+            !payload ||
+            typeof payload !== 'object' ||
+            Array.isArray(payload)
+          ) {
+            throw new Error('Invalid settings response');
+          }
+          return payload;
+        },
+        force,
+      );
+      if (serverSettings === null) {
+        return; // No success yet: leave the existing startup values untouched.
+      }
       paperWidthRef.current =
         Number(serverSettings.paperWidthMm) >= 76 ? 576 : 384;
       receiptConfigRef.current =
         serverSettings.receipt && typeof serverSettings.receipt === 'object'
           ? serverSettings.receipt
           : null;
-    } catch {
-      paperWidthRef.current = 576;
-      // Leave receiptConfigRef untouched on failure so a transient network
-      // blip doesn't blank out the last-known-good design mid-shift.
-    }
-  }, []);
+    },
+    [],
+  );
 
   const processRoute = useCallback(
     async (order: RoutedOrder, route: Route, activeSettings: Settings) => {
@@ -804,7 +830,7 @@ function App(): JSX.Element {
             ? 'ดึงมือนอกเวลาเปิดร้าน'
             : '',
         );
-        await loadPaperWidth(activeSettings);
+        await loadPaperWidth(activeSettings, options.manual === true);
         const response = await fetch(
           `${normaliseBaseUrl(activeSettings.apiBaseUrl)}/api/orders`,
           {
@@ -964,6 +990,7 @@ function App(): JSX.Element {
       settingsRef.current = saved;
       setSettings(saved);
       setNotice('บันทึกการตั้งค่าแล้ว');
+      await loadPaperWidth(saved, true);
       await refreshInternalStatus();
       await pollOrders(saved);
     } catch (error) {

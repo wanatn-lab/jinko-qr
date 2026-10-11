@@ -20,6 +20,10 @@ const settings = {
 };
 const printer = {
   getSettings: jest.fn(async () => settings),
+  saveSettings: jest.fn(async () => settings),
+  requestSettingsRefresh: jest.fn(async () => {}),
+  getDeviceId: jest.fn(async () => 'test-device'),
+  getDeviceName: jest.fn(async () => 'test-device-name'),
   getPrintedKeys: jest.fn(async (): Promise<string[]> => []),
   hasCompletedBootstrap: jest.fn(async () => true),
   getInternalPrinterStatus: jest.fn(async () => ({
@@ -33,6 +37,7 @@ const printer = {
   markBootstrapCompleted: jest.fn(async () => {}),
   clearPrintedKeys: jest.fn(async () => {}),
   printInternal: jest.fn(async (_ticket: unknown) => ({ok: true})),
+  printReceipt: jest.fn(async (_receipt: unknown) => ({ok: true})),
   printNetwork: jest.fn(
     async (_ticket: unknown, _host: string, _port: number, _cut: boolean) => ({
       ok: true,
@@ -53,15 +58,37 @@ const order = {
     {name: 'ข้าวผัด', category: 'อาหาร', qty: 2},
   ],
 };
+let remoteSettings: {paperWidthMm: number; receipt?: {title: string}};
+let settingsOffline = false;
+let uniqueOrders = false;
+let jobs: Array<{
+  id: string;
+  items: Array<{name: string; qty: number; price: number}>;
+  receiptConfig?: {title: string};
+}> = [];
 const mockFetch = jest.fn(async (url: string, _init?: RequestInit) => {
   const endpoint = new URL(url).pathname;
-  if (endpoint === '/api/orders') return {ok: true, json: async () => [order]};
-  if (endpoint === '/api/print-jobs')
-    return {ok: true, json: async () => ({jobs: []})};
-  if (endpoint === '/api/settings')
-    return {ok: true, json: async () => ({paperWidthMm: 80})};
+  if (endpoint === '/api/orders')
+    return {
+      ok: true,
+      json: async () => [
+        {...order, id: uniqueOrders ? `order-${Date.now()}` : order.id},
+      ],
+    };
+  if (endpoint === '/api/print-jobs') {
+    return {
+      ok: true,
+      json: async () => (_init?.method === 'POST' ? {ok: true} : {jobs}),
+    };
+  }
+  if (endpoint === '/api/settings') {
+    if (settingsOffline) throw new Error('settings offline');
+    return {ok: true, json: async () => remoteSettings};
+  }
   if (endpoint === '/api/shop-status')
     return {ok: true, json: async () => ({specialOpenDate: null})};
+  if (endpoint === '/api/printer-status')
+    return {ok: true, json: async () => ({ok: true})};
   throw new Error(`Unexpected mocked request: ${endpoint}`);
 });
 const originalFetch = global.fetch;
@@ -89,6 +116,10 @@ function queueCalls(path: string) {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  remoteSettings = {paperWidthMm: 80};
+  settingsOffline = false;
+  uniqueOrders = false;
+  jobs = [];
   jest.useFakeTimers();
   jest.setSystemTime(new Date('2026-10-11T10:31:00+07:00'));
   Object.defineProperty(AppState, 'currentState', {
@@ -210,4 +241,151 @@ test('manual sync retains first-sync skipExisting protection', async () => {
   expect(printer.markBootstrapCompleted).toHaveBeenCalledTimes(1);
   expect(printer.printInternal).not.toHaveBeenCalled();
   expect(printer.printNetwork).not.toHaveBeenCalled();
+});
+
+test('automatic rounds reuse settings for five minutes then print using newest successful width/config', async () => {
+  jest.setSystemTime(new Date('2026-10-11T12:00:00+07:00'));
+  remoteSettings = {paperWidthMm: 58, receipt: {title: 'Old design'}};
+  uniqueOrders = true;
+  await mount();
+  expect(queueCalls('/api/settings')).toHaveLength(1);
+  expect(printer.printInternal).toHaveBeenLastCalledWith(
+    expect.objectContaining({paperWidthDots: 384}),
+  );
+  remoteSettings = {paperWidthMm: 80, receipt: {title: 'New design'}};
+  for (let i = 0; i < 49; i++) {
+    await act(async () => {
+      jest.advanceTimersByTime(6000);
+      await settle();
+    });
+  }
+  expect(queueCalls('/api/settings')).toHaveLength(1);
+  expect(printer.printInternal).toHaveBeenLastCalledWith(
+    expect.objectContaining({paperWidthDots: 384}),
+  );
+  jobs = [{id: 'receipt-new', items: [{name: 'ข้าว', qty: 1, price: 50}]}];
+  await act(async () => {
+    jest.advanceTimersByTime(6000);
+    await settle();
+  });
+  expect(queueCalls('/api/settings')).toHaveLength(2);
+  expect(printer.printInternal).toHaveBeenLastCalledWith(
+    expect.objectContaining({paperWidthDots: 576}),
+  );
+  expect(printer.printReceipt).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      paperWidthDots: 576,
+      receiptConfig: remoteSettings.receipt,
+    }),
+  );
+});
+
+test('manual forces settings refresh, failure preserves print values and waits 60 seconds', async () => {
+  remoteSettings = {paperWidthMm: 58, receipt: {title: 'Last successful'}};
+  await mount();
+  await act(async () => {
+    await button('ซิงก์ตอนนี้').props.onPress();
+    await settle();
+  });
+  settingsOffline = true;
+  jest.setSystemTime(new Date('2026-10-11T10:31:06+07:00'));
+  uniqueOrders = true;
+  jobs = [{id: 'receipt-failure', items: [{name: 'ข้าว', qty: 1, price: 50}]}];
+  await act(async () => {
+    await button('ซิงก์ตอนนี้').props.onPress();
+    await settle();
+  });
+  expect(queueCalls('/api/settings')).toHaveLength(2);
+  expect(printer.printInternal).toHaveBeenLastCalledWith(
+    expect.objectContaining({paperWidthDots: 384}),
+  );
+  expect(printer.printReceipt).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      paperWidthDots: 384,
+      receiptConfig: remoteSettings.receipt,
+    }),
+  );
+  settingsOffline = false;
+  remoteSettings = {paperWidthMm: 80, receipt: {title: 'Recovered'}};
+  jest.setSystemTime(new Date('2026-10-11T10:32:05+07:00'));
+  await act(async () => {
+    await button('ซิงก์ตอนนี้').props.onPress();
+    await settle();
+  });
+  expect(queueCalls('/api/settings')).toHaveLength(2);
+  jest.setSystemTime(new Date('2026-10-11T10:32:06+07:00'));
+  jobs = [
+    {
+      id: 'receipt-snapshot',
+      receiptConfig: {title: 'Checkout snapshot'},
+      items: [{name: 'ข้าว', qty: 1, price: 50}],
+    },
+  ];
+  await act(async () => {
+    await button('ซิงก์ตอนนี้').props.onPress();
+    await settle();
+  });
+  expect(queueCalls('/api/settings')).toHaveLength(3);
+  expect(printer.printInternal).toHaveBeenLastCalledWith(
+    expect.objectContaining({paperWidthDots: 576}),
+  );
+  expect(printer.printReceipt).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      paperWidthDots: 576,
+      receiptConfig: {title: 'Checkout snapshot'},
+    }),
+  );
+});
+
+test('saving settings forces refresh even outside hours without bypassing the order gate', async () => {
+  await mount();
+  await act(async () => {
+    await button('ซิงก์ตอนนี้').props.onPress();
+    await settle();
+  });
+  remoteSettings = {paperWidthMm: 58, receipt: {title: 'Saved design'}};
+  await act(async () => {
+    await button('บันทึกการตั้งค่า').props.onPress();
+    await settle();
+  });
+  expect(queueCalls('/api/settings')).toHaveLength(2);
+  expect(queueCalls('/api/orders')).toHaveLength(1);
+  expect(printer.requestSettingsRefresh).toHaveBeenCalledTimes(2);
+  uniqueOrders = true;
+  jest.setSystemTime(new Date('2026-10-11T10:31:06+07:00'));
+  await act(async () => {
+    await button('ซิงก์ตอนนี้').props.onPress();
+    await settle();
+  });
+  expect(printer.printInternal).toHaveBeenLastCalledWith(
+    expect.objectContaining({paperWidthDots: 384}),
+  );
+});
+
+test('manual refresh replaces fresh settings before printing the same round', async () => {
+  await mount();
+  await act(async () => {
+    await button('ซิงก์ตอนนี้').props.onPress();
+    await settle();
+  });
+  remoteSettings = {paperWidthMm: 58, receipt: {title: 'Fresh manual design'}};
+  uniqueOrders = true;
+  jobs = [
+    {id: 'receipt-manual-design', items: [{name: 'ข้าว', qty: 1, price: 50}]},
+  ];
+  jest.setSystemTime(new Date('2026-10-11T10:31:06+07:00'));
+  await act(async () => {
+    await button('ซิงก์ตอนนี้').props.onPress();
+    await settle();
+  });
+  expect(queueCalls('/api/settings')).toHaveLength(2);
+  expect(printer.printInternal).toHaveBeenLastCalledWith(
+    expect.objectContaining({paperWidthDots: 384}),
+  );
+  expect(printer.printReceipt).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      paperWidthDots: 384,
+      receiptConfig: remoteSettings.receipt,
+    }),
+  );
 });

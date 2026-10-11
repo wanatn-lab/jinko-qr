@@ -102,6 +102,12 @@ public final class IminPrinterModule extends ReactContextBaseJavaModule {
   }
 
   @ReactMethod
+  public void requestSettingsRefresh(Promise promise) {
+    preferences.edit().putString(SettingsCache.REFRESH_REQUEST_KEY, UUID.randomUUID().toString()).apply();
+    promise.resolve(null);
+  }
+
+  @ReactMethod
   public void getDeviceId(Promise promise) {
     String deviceId = preferences.getString("deviceId", null);
     if (deviceId == null || deviceId.trim().isEmpty()) {

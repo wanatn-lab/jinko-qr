@@ -78,6 +78,12 @@ public final class OrderPollingService extends Service {
   private long lastSpecialCheckAt;
   private long lastPrinterStatusAt;
   private String lastPrinterStatusSignature;
+  private final SettingsCache<JSONObject> serverSettingsCache = new SettingsCache<>(
+      new JSONObject(), new SettingsCache.Clock() {
+        @Override public long now() { return android.os.SystemClock.elapsedRealtime(); }
+      });
+  private SharedPreferences.OnSharedPreferenceChangeListener settingsRefreshListener;
+  private String lastSettingsRefreshRequest;
 
   static void start(Context context) {
     SharedPreferences preferences = context.getSharedPreferences(PrintHistory.PREFS, MODE_PRIVATE);
@@ -98,6 +104,23 @@ public final class OrderPollingService extends Service {
   public void onCreate() {
     super.onCreate();
     preferences = getSharedPreferences(PrintHistory.PREFS, MODE_PRIVATE);
+    lastSettingsRefreshRequest = preferences.getString(SettingsCache.REFRESH_REQUEST_KEY, "");
+    settingsRefreshListener = new SharedPreferences.OnSharedPreferenceChangeListener() {
+      @Override public void onSharedPreferenceChanged(SharedPreferences prefs, String key) {
+        if (!SettingsCache.REFRESH_REQUEST_KEY.equals(key) || worker.isShutdown()) return;
+        try {
+          worker.execute(new Runnable() {
+            @Override public void run() {
+              loadServerSettings(normaliseBaseUrl(preferences.getString(
+                  "apiBaseUrl", "https://jinko-order.vercel.app")));
+            }
+          });
+        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+          // The service was stopped between the shutdown check and submission.
+        }
+      }
+    };
+    preferences.registerOnSharedPreferenceChangeListener(settingsRefreshListener);
   }
 
   @Override
@@ -122,6 +145,7 @@ public final class OrderPollingService extends Service {
   public void onDestroy() {
     // Finish a ticket already handed to the printer before the foreground UI resumes.  Interrupting
     // it here can cut an iMin receipt halfway and then let the UI send the same order again.
+    preferences.unregisterOnSharedPreferenceChangeListener(settingsRefreshListener);
     if (pollingTask != null) pollingTask.cancel(false);
     if (qrPollingTask != null) qrPollingTask.cancel(false);
     worker.shutdown();
@@ -486,11 +510,17 @@ public final class OrderPollingService extends Service {
   }
 
   private JSONObject loadServerSettings(String baseUrl) {
-    try {
-      return new JSONObject(fetchString(baseUrl + "/api/settings"));
-    } catch (Exception ignored) {
-      return new JSONObject();
-    }
+    String request = preferences.getString(SettingsCache.REFRESH_REQUEST_KEY, "");
+    boolean force = !request.equals(lastSettingsRefreshRequest);
+    // If throttled after failure, keep the token pending for the next eligible poll.
+    JSONObject result = serverSettingsCache.refresh(new SettingsCache.Loader<JSONObject>() {
+      @Override public JSONObject load() throws Exception {
+        JSONObject next = new JSONObject(fetchString(baseUrl + "/api/settings"));
+        lastSettingsRefreshRequest = request;
+        return next;
+      }
+    }, force);
+    return result;
   }
 
   private static int paperWidthDots(JSONObject settings) {
