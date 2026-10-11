@@ -61,7 +61,7 @@ public final class OrderPollingService extends Service {
   private static final long HANDOFF_DELAY_SECONDS = 2;
   // QR table labels are explicitly requested by a human, so keep this separate from
   // normal order polling and check it promptly without making order polling aggressive.
-  private static final long QR_POLL_SECONDS = 1;
+  private static final long QR_POLL_SECONDS = 15;
   private static final TimeZone BANGKOK = TimeZone.getTimeZone("Asia/Bangkok");
   // Same generic ESC/POS Bluetooth SPP UUID used by IminPrinterModule — kept in sync here because
   // this service re-implements printing independently while the app is backgrounded.
