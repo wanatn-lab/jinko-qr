@@ -61,7 +61,7 @@ public final class OrderPollingService extends Service {
   private static final long HANDOFF_DELAY_SECONDS = 2;
   // QR table labels are explicitly requested by a human, so keep this separate from
   // normal order polling and check it promptly without making order polling aggressive.
-  private static final long QR_POLL_SECONDS = 1;
+  private static final long QR_POLL_SECONDS = 15;
   private static final TimeZone BANGKOK = TimeZone.getTimeZone("Asia/Bangkok");
   // Same generic ESC/POS Bluetooth SPP UUID used by IminPrinterModule — kept in sync here because
   // this service re-implements printing independently while the app is backgrounded.
@@ -74,6 +74,16 @@ public final class OrderPollingService extends Service {
   private SharedPreferences preferences;
   private IminPrintUtils internalPrinter;
   private boolean internalPrinterInitialized;
+  private String specialOpenDate;
+  private long lastSpecialCheckAt;
+  private long lastPrinterStatusAt;
+  private String lastPrinterStatusSignature;
+  private final SettingsCache<JSONObject> serverSettingsCache = new SettingsCache<>(
+      new JSONObject(), new SettingsCache.Clock() {
+        @Override public long now() { return android.os.SystemClock.elapsedRealtime(); }
+      });
+  private SharedPreferences.OnSharedPreferenceChangeListener settingsRefreshListener;
+  private String lastSettingsRefreshRequest;
 
   static void start(Context context) {
     SharedPreferences preferences = context.getSharedPreferences(PrintHistory.PREFS, MODE_PRIVATE);
@@ -94,6 +104,23 @@ public final class OrderPollingService extends Service {
   public void onCreate() {
     super.onCreate();
     preferences = getSharedPreferences(PrintHistory.PREFS, MODE_PRIVATE);
+    lastSettingsRefreshRequest = preferences.getString(SettingsCache.REFRESH_REQUEST_KEY, "");
+    settingsRefreshListener = new SharedPreferences.OnSharedPreferenceChangeListener() {
+      @Override public void onSharedPreferenceChanged(SharedPreferences prefs, String key) {
+        if (!SettingsCache.REFRESH_REQUEST_KEY.equals(key) || worker.isShutdown()) return;
+        try {
+          worker.execute(new Runnable() {
+            @Override public void run() {
+              loadServerSettings(normaliseBaseUrl(preferences.getString(
+                  "apiBaseUrl", "https://jinko-order.vercel.app")));
+            }
+          });
+        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+          // The service was stopped between the shutdown check and submission.
+        }
+      }
+    };
+    preferences.registerOnSharedPreferenceChangeListener(settingsRefreshListener);
   }
 
   @Override
@@ -118,6 +145,7 @@ public final class OrderPollingService extends Service {
   public void onDestroy() {
     // Finish a ticket already handed to the printer before the foreground UI resumes.  Interrupting
     // it here can cut an iMin receipt halfway and then let the UI send the same order again.
+    preferences.unregisterOnSharedPreferenceChangeListener(settingsRefreshListener);
     if (pollingTask != null) pollingTask.cancel(false);
     if (qrPollingTask != null) qrPollingTask.cancel(false);
     worker.shutdown();
@@ -127,7 +155,7 @@ public final class OrderPollingService extends Service {
 
   private void schedulePolling() {
     if (pollingTask != null && !pollingTask.isCancelled()) return;
-    int seconds = Math.max(2, Math.min(30, preferences.getInt("pollSeconds", 4)));
+    int seconds = Math.max(2, Math.min(30, preferences.getInt("pollSeconds", 6)));
     pollingTask = worker.scheduleWithFixedDelay(new Runnable() {
       @Override
       public void run() {
@@ -149,6 +177,11 @@ public final class OrderPollingService extends Service {
     }
     try {
       String baseUrl = normaliseBaseUrl(preferences.getString("apiBaseUrl", "https://jinko-order.vercel.app"));
+      syncSpecialOpen(baseUrl);
+      if (!ShopHours.canPollOrders(new Date(), specialOpenDate)) {
+        updateNotification("นอกเวลาเปิดร้าน หยุดดึงออเดอร์");
+        return;
+      }
       // The foreground React screen is paused while this service owns printing.
       // Fetch the full settings object here as well, not just the paper width;
       // older queued jobs may not contain their own receiptConfig snapshot.
@@ -245,6 +278,7 @@ public final class OrderPollingService extends Service {
           lastFailure = error.getMessage();
         }
       }
+      reportPrinterStatus(baseUrl);
       if (lastFailure != null) {
         updateNotification("พิมพ์ไม่สำเร็จ: " + lastFailure);
       } else if (printedNow > 0) {
@@ -421,12 +455,72 @@ public final class OrderPollingService extends Service {
     return receipts;
   }
 
-  private JSONObject loadServerSettings(String baseUrl) {
+  private void syncSpecialOpen(String baseUrl) {
+    Date now = new Date();
+    if (!ShopHours.isSpecialCheckDue(now, lastSpecialCheckAt)) return;
+    lastSpecialCheckAt = now.getTime();
     try {
-      return new JSONObject(fetchString(baseUrl + "/api/settings"));
+      JSONObject status = fetchObject(baseUrl + "/api/shop-status");
+      String next = status.optString("specialOpenDate", "").trim();
+      specialOpenDate = next.isEmpty() ? null : next;
     } catch (Exception ignored) {
-      return new JSONObject();
+      // Keep the last known special-opening value; status checks are best effort.
     }
+  }
+
+  private void reportPrinterStatus(String baseUrl) {
+    if (!ShopHours.isShopOpen(new Date(), specialOpenDate)) return;
+    boolean ready = false;
+    String error = "ยังไม่ได้ตรวจสอบเครื่องพิมพ์";
+    if (internalPrinterInitialized) {
+      try {
+        int code = internalPrinter.getPrinterStatus(IminPrintUtils.PrintConnectType.USB);
+        ready = code == 0 || code == 8;
+        error = ready ? null : "iMin status " + code;
+      } catch (Exception statusError) {
+        error = statusError.getMessage();
+      }
+    }
+    String signature = ready + ":" + String.valueOf(error);
+    if (signature.equals(lastPrinterStatusSignature)
+        && System.currentTimeMillis() - lastPrinterStatusAt < 60 * 1000L) return;
+    try {
+      JSONObject printer = new JSONObject();
+      printer.put("id", "imin");
+      printer.put("name", "iMin USB");
+      printer.put("ip", "usb");
+      printer.put("port", 0);
+      printer.put("ok", ready);
+      printer.put("error", error == null ? JSONObject.NULL : error);
+      printer.put("latencyMs", JSONObject.NULL);
+      JSONArray printers = new JSONArray();
+      printers.put(printer);
+      JSONObject payload = new JSONObject();
+      payload.put("instanceId", deviceId());
+      payload.put("hostname", Build.MANUFACTURER + " " + Build.MODEL);
+      payload.put("printers", printers);
+      JSONObject response = postJson(baseUrl + "/api/printer-status", payload);
+      if (response.optBoolean("ok", false)) {
+        lastPrinterStatusSignature = signature;
+        lastPrinterStatusAt = System.currentTimeMillis();
+      }
+    } catch (Exception ignored) {
+      // Reporting must never interrupt or roll back a print.
+    }
+  }
+
+  private JSONObject loadServerSettings(String baseUrl) {
+    String request = preferences.getString(SettingsCache.REFRESH_REQUEST_KEY, "");
+    boolean force = !request.equals(lastSettingsRefreshRequest);
+    // If throttled after failure, keep the token pending for the next eligible poll.
+    JSONObject result = serverSettingsCache.refresh(new SettingsCache.Loader<JSONObject>() {
+      @Override public JSONObject load() throws Exception {
+        JSONObject next = new JSONObject(fetchString(baseUrl + "/api/settings"));
+        lastSettingsRefreshRequest = request;
+        return next;
+      }
+    }, force);
+    return result;
   }
 
   private static int paperWidthDots(JSONObject settings) {

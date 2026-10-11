@@ -13,6 +13,14 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import {
+  DEFAULT_POLL_SECONDS,
+  canPollOrders,
+  isShopOpen,
+  isSpecialCheckDue,
+  shopClosedNotice,
+} from './shopHours';
+import {createSettingsCache} from './settingsCache';
 
 type PrinterMode = 'imin' | 'network' | 'bluetooth';
 
@@ -118,6 +126,8 @@ type IminPrinterModule = {
   getSettings(): Promise<Settings>;
   saveSettings(settings: Settings): Promise<Settings>;
   getDeviceId(): Promise<string>;
+  requestSettingsRefresh(): Promise<void>;
+  getDeviceName(): Promise<string>;
   getPrintedKeys(): Promise<string[]>;
   claimPrint(key: string): Promise<boolean>;
   releasePrint(key: string): Promise<void>;
@@ -161,7 +171,7 @@ const DEFAULT_SETTINGS: Settings = {
   drinkCategory: 'เครื่องดื่ม',
   kitchenHost: '192.168.1.242',
   kitchenPort: 9100,
-  pollSeconds: 4,
+  pollSeconds: DEFAULT_POLL_SECONDS,
   autoPrint: true,
   skipExistingOnFirstSync: true,
   printerMode: 'imin',
@@ -208,8 +218,12 @@ function timestampDate(value: unknown): Date | null {
   if (typeof value === 'string' || typeof value === 'number') {
     const numeric = finiteNumber(value);
     const date =
-      typeof value === 'number' || (typeof value === 'string' && numeric !== null)
-        ? new Date((numeric ?? 0) * (Math.abs(numeric ?? 0) < 100_000_000_000 ? 1000 : 1))
+      typeof value === 'number' ||
+      (typeof value === 'string' && numeric !== null)
+        ? new Date(
+            (numeric ?? 0) *
+              (Math.abs(numeric ?? 0) < 100_000_000_000 ? 1000 : 1),
+          )
         : new Date(value);
     return Number.isNaN(date.getTime()) ? null : date;
   }
@@ -410,6 +424,7 @@ function App(): JSX.Element {
   );
   const [lastSync, setLastSync] = useState('ยังไม่ซิงก์');
   const [notice, setNotice] = useState('กำลังเปิดระบบ…');
+  const [manualNotice, setManualNotice] = useState('');
   const [ready, setReady] = useState(false);
   const [appIsActive, setAppIsActive] = useState(
     AppState.currentState === 'active',
@@ -418,6 +433,7 @@ function App(): JSX.Element {
   const [syncing, setSyncing] = useState(false);
   const [pairedPrinters, setPairedPrinters] = useState<BluetoothPrinter[]>([]);
   const [scanningBluetooth, setScanningBluetooth] = useState(false);
+  const [specialOpenDate, setSpecialOpenDate] = useState<string | null>(null);
 
   const settingsRef = useRef(settings);
   const printedRef = useRef<Set<string>>(new Set());
@@ -430,7 +446,15 @@ function App(): JSX.Element {
   // successful fetch so a startup receipt still prints (with defaults) rather
   // than crashing.
   const receiptConfigRef = useRef<ReceiptConfig | null>(null);
+  const remoteSettingsCacheRef = useRef(
+    createSettingsCache<{paperWidthMm?: unknown; receipt?: ReceiptConfig}>(),
+  );
   const deviceIdRef = useRef<string | null>(null);
+  const deviceNameRef = useRef<string | null>(null);
+  const specialOpenDateRef = useRef<string | null>(null);
+  const specialCheckAtRef = useRef<number | null>(null);
+  const lastPrinterStatusSignatureRef = useRef<string | null>(null);
+  const lastPrinterStatusAtRef = useRef(0);
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -489,6 +513,13 @@ function App(): JSX.Element {
     setPrinted(next);
   }, []);
 
+  const deviceName = useCallback(async () => {
+    if (!deviceNameRef.current) {
+      deviceNameRef.current = await IminPrinter.getDeviceName();
+    }
+    return deviceNameRef.current;
+  }, []);
+
   const deviceId = useCallback(async () => {
     if (!deviceIdRef.current) {
       deviceIdRef.current = await IminPrinter.getDeviceId();
@@ -496,27 +527,120 @@ function App(): JSX.Element {
     return deviceIdRef.current;
   }, []);
 
-  const loadPaperWidth = useCallback(async (activeSettings: Settings) => {
+  const syncSpecialOpen = useCallback(async (activeSettings: Settings) => {
+    const now = new Date();
+    if (!isSpecialCheckDue(now, specialCheckAtRef.current)) return;
+    specialCheckAtRef.current = now.getTime();
     try {
       const response = await fetch(
-        `${normaliseBaseUrl(activeSettings.apiBaseUrl)}/api/settings`,
+        `${normaliseBaseUrl(activeSettings.apiBaseUrl)}/api/shop-status`,
+        {
+          headers: {Accept: 'application/json'},
+        },
       );
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+      if (!response.ok) return;
+      const payload = await response.json();
+      const next =
+        typeof payload?.specialOpenDate === 'string'
+          ? payload.specialOpenDate
+          : null;
+      specialOpenDateRef.current = next;
+      setSpecialOpenDate(next);
+    } catch {
+      // A failed Monday status check must not affect printing or alter the last known value.
+    }
+  }, []);
+
+  const reportPrinterStatus = useCallback(
+    async (status: PrinterStatus | null, activeSettings: Settings) => {
+      if (!isShopOpen(new Date(), specialOpenDateRef.current)) return;
+      const resolvedStatus = status || internalStatus;
+      if (!resolvedStatus) return;
+      const payload = {
+        instanceId: await deviceId(),
+        hostname: await deviceName(),
+        printers: [
+          {
+            id: 'imin',
+            name: 'iMin USB',
+            ip: 'usb',
+            port: 0,
+            ok: Boolean(resolvedStatus.ready),
+            error: resolvedStatus.ready ? null : resolvedStatus.message,
+            latencyMs: null,
+          },
+        ],
+      };
+      const signature = JSON.stringify(payload.printers);
+      const heartbeatDue =
+        Date.now() - lastPrinterStatusAtRef.current >= 60 * 1000;
+      if (signature === lastPrinterStatusSignatureRef.current && !heartbeatDue)
+        return;
+      try {
+        const response = await fetch(
+          `${normaliseBaseUrl(activeSettings.apiBaseUrl)}/api/printer-status`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Accept: 'application/json',
+            },
+            body: JSON.stringify(payload),
+          },
+        );
+        if (response.ok) {
+          lastPrinterStatusSignatureRef.current = signature;
+          lastPrinterStatusAtRef.current = Date.now();
+        }
+      } catch {
+        // Status reporting is best effort and must never affect printing.
       }
-      const serverSettings = await response.json();
+    },
+    [deviceId, deviceName, internalStatus],
+  );
+
+  const loadPaperWidth = useCallback(
+    async (activeSettings: Settings, force = false) => {
+      if (force) {
+        try {
+          // Notify the separate service cache; this does not trigger order polling.
+          await IminPrinter.requestSettingsRefresh();
+        } catch {
+          // A refresh notification failure must not block this print round.
+        }
+      }
+      const serverSettings = await remoteSettingsCacheRef.current.refresh(
+        async () => {
+          const response = await fetch(
+            `${normaliseBaseUrl(activeSettings.apiBaseUrl)}/api/settings`,
+          );
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+          const payload = await response.json();
+          if (
+            !payload ||
+            typeof payload !== 'object' ||
+            Array.isArray(payload)
+          ) {
+            throw new Error('Invalid settings response');
+          }
+          return payload;
+        },
+        force,
+      );
+      if (serverSettings === null) {
+        return; // No success yet: leave the existing startup values untouched.
+      }
       paperWidthRef.current =
         Number(serverSettings.paperWidthMm) >= 76 ? 576 : 384;
       receiptConfigRef.current =
         serverSettings.receipt && typeof serverSettings.receipt === 'object'
           ? serverSettings.receipt
           : null;
-    } catch {
-      paperWidthRef.current = 576;
-      // Leave receiptConfigRef untouched on failure so a transient network
-      // blip doesn't blank out the last-known-good design mid-shift.
-    }
-  }, []);
+    },
+    [],
+  );
 
   const processRoute = useCallback(
     async (order: RoutedOrder, route: Route, activeSettings: Settings) => {
@@ -681,7 +805,7 @@ function App(): JSX.Element {
   );
 
   const pollOrders = useCallback(
-    async (overrideSettings?: Settings) => {
+    async (overrideSettings?: Settings, options: {manual?: boolean} = {}) => {
       if (pollingRef.current) {
         return;
       }
@@ -689,7 +813,24 @@ function App(): JSX.Element {
       setSyncing(true);
       const activeSettings = overrideSettings || settingsRef.current;
       try {
-        await loadPaperWidth(activeSettings);
+        // Only an explicit button press bypasses hours, for this invocation alone.
+        // Timers, startup and settings saves retain the automatic hours gate.
+        if (!options.manual) {
+          await syncSpecialOpen(activeSettings);
+        }
+        if (
+          !options.manual &&
+          !canPollOrders(new Date(), specialOpenDateRef.current)
+        ) {
+          setNotice(shopClosedNotice(new Date(), specialOpenDateRef.current));
+          return;
+        }
+        setManualNotice(
+          options.manual && !isShopOpen(new Date(), specialOpenDateRef.current)
+            ? 'ดึงมือนอกเวลาเปิดร้าน'
+            : '',
+        );
+        await loadPaperWidth(activeSettings, options.manual === true);
         const response = await fetch(
           `${normaliseBaseUrl(activeSettings.apiBaseUrl)}/api/orders`,
           {
@@ -722,7 +863,8 @@ function App(): JSX.Element {
           .filter(order => routesFor(order).length > 0)
           .sort(
             (first, second) =>
-            timestampMillis(first.createdAt) - timestampMillis(second.createdAt),
+              timestampMillis(first.createdAt) -
+              timestampMillis(second.createdAt),
           );
         setOrders(activeOrders);
         setLastSync(`ซิงก์ ${new Date().toLocaleTimeString('th-TH')}`);
@@ -764,7 +906,13 @@ function App(): JSX.Element {
         setSyncing(false);
       }
     },
-    [loadPaperWidth, markPrinted, processReceiptJob, processRoute],
+    [
+      loadPaperWidth,
+      markPrinted,
+      processReceiptJob,
+      processRoute,
+      syncSpecialOpen,
+    ],
   );
 
   useEffect(() => {
@@ -807,7 +955,7 @@ function App(): JSX.Element {
     }
     const seconds = Math.max(
       2,
-      Math.min(30, Number(settings.pollSeconds) || 4),
+      Math.min(30, Number(settings.pollSeconds) || DEFAULT_POLL_SECONDS),
     );
     const timer = setInterval(() => pollOrders(), seconds * 1000);
     return () => clearInterval(timer);
@@ -828,7 +976,7 @@ function App(): JSX.Element {
         ),
         pollSeconds: Math.max(
           2,
-          Math.min(30, Number(settings.pollSeconds) || 4),
+          Math.min(30, Number(settings.pollSeconds) || DEFAULT_POLL_SECONDS),
         ),
         counterHost: settings.counterHost.trim(),
         counterPort: Math.max(
@@ -842,6 +990,7 @@ function App(): JSX.Element {
       settingsRef.current = saved;
       setSettings(saved);
       setNotice('บันทึกการตั้งค่าแล้ว');
+      await loadPaperWidth(saved, true);
       await refreshInternalStatus();
       await pollOrders(saved);
     } catch (error) {
@@ -851,8 +1000,29 @@ function App(): JSX.Element {
     }
   };
 
+  useEffect(() => {
+    if (!ready || !appIsActive) return undefined;
+    const report = () => {
+      reportPrinterStatus(internalStatus, settingsRef.current);
+    };
+    report();
+    const timer = setInterval(report, 60 * 1000);
+    return () => clearInterval(timer);
+  }, [
+    appIsActive,
+    internalStatus,
+    ready,
+    reportPrinterStatus,
+    settings.apiBaseUrl,
+    specialOpenDate,
+  ]);
+
   const printerModeLabel = (mode: PrinterMode) =>
-    mode === 'network' ? 'LAN' : mode === 'bluetooth' ? 'Bluetooth' : 'iMin USB';
+    mode === 'network'
+      ? 'LAN'
+      : mode === 'bluetooth'
+      ? 'Bluetooth'
+      : 'iMin USB';
 
   const printInternalTest = async () => {
     try {
@@ -871,7 +1041,11 @@ function App(): JSX.Element {
         },
         settings,
       );
-      setNotice(`ส่งใบทดสอบไปเครื่องพิมพ์เคาน์เตอร์ (${printerModeLabel(settings.printerMode)}) แล้ว`);
+      setNotice(
+        `ส่งใบทดสอบไปเครื่องพิมพ์เคาน์เตอร์ (${printerModeLabel(
+          settings.printerMode,
+        )}) แล้ว`,
+      );
       if (settings.printerMode === 'imin') {
         await refreshInternalStatus();
       }
@@ -900,7 +1074,11 @@ function App(): JSX.Element {
         },
         settings,
       );
-      setNotice(`ส่งใบทดสอบใบเสร็จไปเครื่องพิมพ์ (${printerModeLabel(settings.printerMode)}) แล้ว`);
+      setNotice(
+        `ส่งใบทดสอบใบเสร็จไปเครื่องพิมพ์ (${printerModeLabel(
+          settings.printerMode,
+        )}) แล้ว`,
+      );
       if (settings.printerMode === 'imin') {
         await refreshInternalStatus();
       }
@@ -945,7 +1123,7 @@ function App(): JSX.Element {
             printedRef.current = new Set();
             setPrinted(new Set());
             setNotice('ล้างประวัติแล้ว — กำลังตรวจคิวเพื่อพิมพ์ใหม่');
-            await pollOrders();
+            await pollOrders(undefined, {manual: true});
           },
         },
       ],
@@ -970,7 +1148,8 @@ function App(): JSX.Element {
           <View>
             <Text style={styles.title}>จิ๊นโค · Print Bridge</Text>
             <Text style={styles.subtitle}>
-              เคาน์เตอร์: {printerModeLabel(settings.printerMode)} · ครัวผ่าน LAN
+              เคาน์เตอร์: {printerModeLabel(settings.printerMode)} · ครัวผ่าน
+              LAN
             </Text>
           </View>
           <View
@@ -992,6 +1171,14 @@ function App(): JSX.Element {
 
         <View style={styles.notice}>
           <Text style={styles.noticeText}>{notice}</Text>
+          {!!manualNotice && (
+            <Text style={styles.noticeText}>{manualNotice}</Text>
+          )}
+          {!!shopClosedNotice(new Date(), specialOpenDate) && (
+            <Text style={styles.closedNoticeText}>
+              {shopClosedNotice(new Date(), specialOpenDate)}
+            </Text>
+          )}
           <Text style={styles.syncText}>{lastSync}</Text>
         </View>
 
@@ -1003,7 +1190,7 @@ function App(): JSX.Element {
           <Pressable
             style={[styles.primaryButton, syncing && styles.buttonDisabled]}
             disabled={syncing}
-            onPress={() => pollOrders()}>
+            onPress={() => pollOrders(undefined, {manual: true})}>
             <Text style={styles.primaryButtonText}>
               {syncing ? 'กำลังซิงก์…' : 'ซิงก์ตอนนี้'}
             </Text>
@@ -1013,21 +1200,21 @@ function App(): JSX.Element {
         <Text style={styles.sectionTitle}>สถานะเครื่องพิมพ์</Text>
         <View style={styles.card}>
           <Text style={styles.cardHeading}>
-            เครื่องพิมพ์เคาน์เตอร์/ใบเสร็จ ({printerModeLabel(settings.printerMode)})
+            เครื่องพิมพ์เคาน์เตอร์/ใบเสร็จ (
+            {printerModeLabel(settings.printerMode)})
           </Text>
           <View style={styles.rowButtons}>
-            {(
-              [
-                {mode: 'imin' as PrinterMode, label: 'iMin USB'},
-                {mode: 'network' as PrinterMode, label: 'LAN'},
-                {mode: 'bluetooth' as PrinterMode, label: 'Bluetooth'},
-              ]
-            ).map(option => (
+            {[
+              {mode: 'imin' as PrinterMode, label: 'iMin USB'},
+              {mode: 'network' as PrinterMode, label: 'LAN'},
+              {mode: 'bluetooth' as PrinterMode, label: 'Bluetooth'},
+            ].map(option => (
               <Pressable
                 key={option.mode}
                 style={[
                   styles.secondaryButton,
-                  settings.printerMode === option.mode && styles.modeButtonActive,
+                  settings.printerMode === option.mode &&
+                    styles.modeButtonActive,
                 ]}
                 onPress={() =>
                   setSettings({...settings, printerMode: option.mode})
@@ -1197,7 +1384,9 @@ function App(): JSX.Element {
               <Text style={styles.fieldLabel}>เครื่องพิมพ์ Bluetooth</Text>
               <Text style={styles.helperText}>
                 {settings.bluetoothAddress
-                  ? `เลือกไว้: ${settings.bluetoothName || settings.bluetoothAddress}`
+                  ? `เลือกไว้: ${
+                      settings.bluetoothName || settings.bluetoothAddress
+                    }`
                   : 'ยังไม่ได้เลือกเครื่องพิมพ์ Bluetooth — จับคู่ (Pair) ในตั้งค่าเครื่องก่อน แล้วกดรีเฟรชด้านล่าง'}
               </Text>
               <Pressable
@@ -1365,6 +1554,12 @@ const styles = StyleSheet.create({
     padding: 13,
   },
   noticeText: {color: '#2B1810', fontWeight: '600', fontSize: 13},
+  closedNoticeText: {
+    color: '#96392E',
+    fontWeight: '800',
+    fontSize: 13,
+    marginTop: 5,
+  },
   syncText: {color: '#7A6A5A', fontSize: 12, marginTop: 4},
   summary: {
     marginTop: 12,

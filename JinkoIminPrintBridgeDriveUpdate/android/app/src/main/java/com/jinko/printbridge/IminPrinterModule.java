@@ -85,7 +85,7 @@ public final class IminPrinterModule extends ReactContextBaseJavaModule {
     saveString(edit, settings, "drinkCategory", "เครื่องดื่ม");
     saveString(edit, settings, "kitchenHost", "192.168.1.242");
     saveInt(edit, settings, "kitchenPort", 9100);
-    saveInt(edit, settings, "pollSeconds", 4);
+    saveInt(edit, settings, "pollSeconds", 6);
     saveBoolean(edit, settings, "autoPrint", true);
     saveBoolean(edit, settings, "skipExistingOnFirstSync", true);
     // เครื่องพิมพ์เคาน์เตอร์/ใบเสร็จ — เดิมผูกกับ iMin USB SDK เสมอ ("imin") ตอนนี้เลือกได้เพิ่มว่า
@@ -102,6 +102,12 @@ public final class IminPrinterModule extends ReactContextBaseJavaModule {
   }
 
   @ReactMethod
+  public void requestSettingsRefresh(Promise promise) {
+    preferences.edit().putString(SettingsCache.REFRESH_REQUEST_KEY, UUID.randomUUID().toString()).apply();
+    promise.resolve(null);
+  }
+
+  @ReactMethod
   public void getDeviceId(Promise promise) {
     String deviceId = preferences.getString("deviceId", null);
     if (deviceId == null || deviceId.trim().isEmpty()) {
@@ -109,6 +115,13 @@ public final class IminPrinterModule extends ReactContextBaseJavaModule {
       preferences.edit().putString("deviceId", deviceId).apply();
     }
     promise.resolve(deviceId);
+  }
+
+  @ReactMethod
+  public void getDeviceName(Promise promise) {
+    String manufacturer = Build.MANUFACTURER == null ? "" : Build.MANUFACTURER.trim();
+    String model = Build.MODEL == null ? "Android device" : Build.MODEL.trim();
+    promise.resolve((manufacturer + " " + model).trim());
   }
 
   @ReactMethod
@@ -549,7 +562,7 @@ public final class IminPrinterModule extends ReactContextBaseJavaModule {
     settings.putString("drinkCategory", preferences.getString("drinkCategory", "เครื่องดื่ม"));
     settings.putString("kitchenHost", preferences.getString("kitchenHost", "192.168.1.242"));
     settings.putInt("kitchenPort", preferences.getInt("kitchenPort", 9100));
-    settings.putInt("pollSeconds", preferences.getInt("pollSeconds", 4));
+    settings.putInt("pollSeconds", preferences.getInt("pollSeconds", 6));
     settings.putBoolean("autoPrint", preferences.getBoolean("autoPrint", true));
     settings.putBoolean("skipExistingOnFirstSync", preferences.getBoolean("skipExistingOnFirstSync", true));
     settings.putString("printerMode", preferences.getString("printerMode", "imin"));
