@@ -19,6 +19,38 @@ const BANGKOK_DAY_FMT = new Intl.DateTimeFormat("en-CA", {
   month: "2-digit",
   day: "2-digit",
 });
+
+const BANGKOK_PARTS_FMT = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "Asia/Bangkok",
+  weekday: "short",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
+const LEGACY_CLIENT_HEADER = "x-jinko-client";
+const SPECIAL_OPEN_KEY = "shopSpecialOpen";
+const OPEN_MINUTE = 11 * 60 + 20;
+const CLOSE_MINUTE = 21 * 60;
+
+function bangkokParts(date) {
+  const values = {};
+  BANGKOK_PARTS_FMT.formatToParts(date).forEach((part) => { values[part.type] = part.value; });
+  return {
+    weekday: values.weekday,
+    date: `${values.year}-${values.month}-${values.day}`,
+    minute: (Number(values.hour) % 24) * 60 + Number(values.minute),
+  };
+}
+
+function isNewTableStatusClient(req) {
+  const headers = req.headers || {};
+  return Object.entries(headers).some(([name, value]) =>
+    name.toLowerCase() === LEGACY_CLIENT_HEADER && String(value) === "2",
+  );
+}
 function bangkokDay(date) {
   return BANGKOK_DAY_FMT.format(date);
 }
@@ -125,54 +157,91 @@ function receiptForTable(orders, clearMap, table, settings, now) {
   };
 }
 
-export default async function handler(req, res) {
-  if (req.method === "GET") {
-    const [orders, clears, settings] = await Promise.all([
-      redis.get("orders"),
-      redis.get("tableClears"),
-      redis.get("settings"),
-    ]);
-    const allOrders = Array.isArray(orders) ? orders : [];
-    const clearMap = clears || {};
-    const tableCount = (settings && settings.tableCount) || 20;
+// Kept separate from the storage read so tests can compare the former three
+// GET values with the single MGET values byte-for-byte at the response level.
+export function tableStatusPayload(orders, clears, settings, now) {
+  const allOrders = Array.isArray(orders) ? orders : [];
+  const clearMap = clears || {};
+  const tableCount = (settings && settings.tableCount) || 20;
 
-    // Only orders placed on today's calendar date (Bangkok time) — this is
-    // what makes the board auto-reset overnight without a manual clear.
-    const today = bangkokDay(new Date());
-    const recent = allOrders.filter((o) => bangkokDay(new Date(o.createdAt)) === today);
+  // Only orders placed on today's calendar date (Bangkok time) — this is
+  // what makes the board auto-reset overnight without a manual clear.
+  const today = bangkokDay(now);
+  const recent = allOrders.filter((o) => bangkokDay(new Date(o.createdAt)) === today);
 
-    const tables = {};
-    for (let t = 1; t <= tableCount; t++) {
-      tables[t] = { table: t, openedAt: null, items: [] };
+  const tables = {};
+  for (let t = 1; t <= tableCount; t++) {
+    tables[t] = { table: t, openedAt: null, items: [] };
+  }
+
+  for (const order of recent) {
+    const tableNum = order.table;
+    const clearedAt = clearMap[tableNum] ? new Date(clearMap[tableNum]).getTime() : 0;
+    if (new Date(order.createdAt).getTime() <= clearedAt) continue; // cleared already, skip
+
+    if (!tables[tableNum]) {
+      tables[tableNum] = { table: Number(tableNum), openedAt: null, items: [] };
     }
-
-    for (const order of recent) {
-      const tableNum = order.table;
-      const clearedAt = clearMap[tableNum] ? new Date(clearMap[tableNum]).getTime() : 0;
-      if (new Date(order.createdAt).getTime() <= clearedAt) continue; // cleared already, skip
-
-      if (!tables[tableNum]) {
-        tables[tableNum] = { table: Number(tableNum), openedAt: null, items: [] };
-      }
-      const bucket = tables[tableNum];
-      if (!bucket.openedAt || new Date(order.createdAt) < new Date(bucket.openedAt)) {
-        bucket.openedAt = order.createdAt;
-      }
-      (order.items || []).forEach((item, itemIndex) => {
-        bucket.items.push({
-          orderId: order.id,
-          itemIndex,
-          name: item.name,
-          price: item.price,
-          qty: item.qty,
-          category: item.category || "",
-          status: item.kitchenStatus || "cooking",
-        });
+    const bucket = tables[tableNum];
+    if (!bucket.openedAt || new Date(order.createdAt) < new Date(bucket.openedAt)) {
+      bucket.openedAt = order.createdAt;
+    }
+    (order.items || []).forEach((item, itemIndex) => {
+      bucket.items.push({
+        orderId: order.id,
+        itemIndex,
+        name: item.name,
+        price: item.price,
+        qty: item.qty,
+        category: item.category || "",
+        status: item.kitchenStatus || "cooking",
       });
-    }
+    });
+  }
 
-    const list = Object.values(tables).sort((a, b) => a.table - b.table);
-    return res.status(200).json({ tableCount, tables: list });
+  const list = Object.values(tables).sort((a, b) => a.table - b.table);
+  return { tableCount, tables: list };
+}
+
+export function createTableStatusHandler({ redis: redisClient = redis, now = () => new Date() } = {}) {
+  return async function handler(req, res) {
+  if (req.method === "GET") {
+    // Old table-status pages predate shop hours and poll all night. Only this
+    // read endpoint receives the compatibility guard: customer ordering and
+    // every POST intentionally remain unchanged.
+    if (!isNewTableStatusClient(req)) {
+      const current = now();
+      const local = bangkokParts(current);
+      if (local.minute < OPEN_MINUTE || local.minute >= CLOSE_MINUTE) {
+        return res.status(200).json({
+          ok: false,
+          closed: true,
+          error: "outdated page - please reload",
+          tableCount: 0,
+          tables: [],
+        });
+      }
+      if (local.weekday === "Mon") {
+        // The special-open value is the sole Redis read added by this guard,
+        // and is needed only during Monday's otherwise-open time window.
+        const specialOpenDate = await redisClient.get(SPECIAL_OPEN_KEY);
+        if (specialOpenDate !== local.date) {
+          return res.status(200).json({
+            ok: false,
+            closed: true,
+            error: "outdated page - please reload",
+            tableCount: 0,
+            tables: [],
+          });
+        }
+      }
+    }
+    const [orders, clears, settings] = await redisClient.mget(
+      "orders",
+      "tableClears",
+      "settings",
+    );
+    return res.status(200).json(tableStatusPayload(orders, clears, settings, now()));
   }
 
   if (req.method === "POST") {
@@ -189,11 +258,11 @@ export default async function handler(req, res) {
 
       const now = new Date();
       const [ordersValue, clearsValue, settingsValue, jobsValue, billHistoryValue] = await Promise.all([
-        redis.get("orders"),
-        redis.get("tableClears"),
-        redis.get("settings"),
-        redis.get("printJobs"),
-        redis.get("billHistory"),
+        redisClient.get("orders"),
+        redisClient.get("tableClears"),
+        redisClient.get("settings"),
+        redisClient.get("printJobs"),
+        redisClient.get("billHistory"),
       ]);
       const orders = Array.isArray(ordersValue) ? ordersValue : [];
       const clears = clearsValue || {};
@@ -227,9 +296,9 @@ export default async function handler(req, res) {
 
       clears[table] = now.toISOString();
       await Promise.all([
-        redis.set("tableClears", clears),
-        redis.set("billHistory", recentBills(history, now)),
-        jobsToSave ? redis.set("printJobs", jobsToSave) : Promise.resolve(),
+        redisClient.set("tableClears", clears),
+        redisClient.set("billHistory", recentBills(history, now)),
+        jobsToSave ? redisClient.set("printJobs", jobsToSave) : Promise.resolve(),
       ]);
       return res.status(200).json({ ok: true, receiptJobId, bill });
     }
@@ -240,13 +309,13 @@ export default async function handler(req, res) {
       if (!orderId || itemIndex == null || !status) {
         return res.status(400).json({ ok: false, error: "missing orderId/itemIndex/status" });
       }
-      const orders = (await redis.get("orders")) || [];
+      const orders = (await redisClient.get("orders")) || [];
       const order = orders.find((o) => o.id === orderId);
       if (!order || !order.items || !order.items[itemIndex]) {
         return res.status(404).json({ ok: false, error: "order or item not found" });
       }
       order.items[itemIndex].kitchenStatus = status;
-      await redis.set("orders", orders);
+      await redisClient.set("orders", orders);
       return res.status(200).json({ ok: true });
     }
 
@@ -256,9 +325,9 @@ export default async function handler(req, res) {
     if (body.action === "clear-table") {
       const { table } = body;
       if (!table) return res.status(400).json({ ok: false, error: "missing table" });
-      const clears = (await redis.get("tableClears")) || {};
+      const clears = (await redisClient.get("tableClears")) || {};
       clears[table] = new Date().toISOString();
-      await redis.set("tableClears", clears);
+      await redisClient.set("tableClears", clears);
       return res.status(200).json({ ok: true });
     }
 
@@ -269,13 +338,13 @@ export default async function handler(req, res) {
       if (!orderId || itemIndex == null) {
         return res.status(400).json({ ok: false, error: "missing orderId/itemIndex" });
       }
-      const orders = (await redis.get("orders")) || [];
+      const orders = (await redisClient.get("orders")) || [];
       const order = orders.find((o) => o.id === orderId);
       if (!order || !order.items || !order.items[itemIndex]) {
         return res.status(404).json({ ok: false, error: "order or item not found" });
       }
       order.items.splice(itemIndex, 1);
-      await redis.set("orders", orders);
+      await redisClient.set("orders", orders);
       return res.status(200).json({ ok: true });
     }
 
@@ -284,4 +353,7 @@ export default async function handler(req, res) {
 
   res.setHeader("Allow", "GET, POST");
   return res.status(405).end("Method not allowed");
+  };
 }
+
+export default createTableStatusHandler();

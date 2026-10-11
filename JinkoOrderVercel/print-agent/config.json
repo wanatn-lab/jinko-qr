@@ -2,7 +2,9 @@
   "printers": [],
   "apiBase": "https://jinko-order.vercel.app",
   "paperWidthMm": 80,
-  "pollIntervalMs": 4000,
+  "pollIntervalMs": 6000,
+  "settingsRefreshMs": 300000,
+  "printerStatusHeartbeatMs": 60000,
   "shopName": "ร้านของคุณ",
   "activeHours": {
     "start": "11:20",

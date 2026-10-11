@@ -946,6 +946,7 @@ let PRINTERS = [];
 let SETTINGS = {};
 let adminMenuCategoryFilter = null; // null = every category
 let PRINTER_STATUS = { updatedAt: null, printers: [] };
+const PRINTER_STATUS_STALE_MS = 3 * 60 * 1000; // heartbeat is 60s; allow missed reports
 const CLOUDINARY_MENU_FOLDER = 'menujk_up';
 
 // ---------- tabs ----------
@@ -1535,12 +1536,25 @@ async function saveGeneralPrintSettings() {
   alert('บันทึกตั้งค่าทั่วไปแล้ว');
 }
 
+function activePrinterAgents() {
+  const now = Date.now();
+  const agents = Array.isArray(PRINTER_STATUS.agents) && PRINTER_STATUS.agents.length
+    ? PRINTER_STATUS.agents
+    : (PRINTER_STATUS.updatedAt ? [PRINTER_STATUS] : []);
+  return agents.filter(agent => agent && agent.updatedAt && now - new Date(agent.updatedAt).getTime() <= PRINTER_STATUS_STALE_MS);
+}
+
 function statusFor(printer) {
-  if (!PRINTER_STATUS.updatedAt) return { cls: 'unknown', label: 'ยังไม่มีข้อมูล — ยังไม่ได้เปิดตัวเชื่อมเครื่องพิมพ์บนคอม' };
-  const ageMs = Date.now() - new Date(PRINTER_STATUS.updatedAt).getTime();
-  if (ageMs > 20000) return { cls: 'unknown', label: 'ตัวเชื่อมเครื่องพิมพ์ไม่ได้เปิดอยู่ (ไม่มีสัญญาณ ' + Math.round(ageMs/1000) + ' วิ)' };
-  const match = PRINTER_STATUS.printers.find(p => p.ip === printer.ip);
-  if (!match) return { cls: 'unknown', label: 'รอข้อมูลจากตัวเชื่อม...' };
+  const agents = activePrinterAgents();
+  if (!agents.length) {
+    const ageMs = PRINTER_STATUS.updatedAt ? Date.now() - new Date(PRINTER_STATUS.updatedAt).getTime() : null;
+    return { cls: 'unknown', label: ageMs == null
+      ? 'ยังไม่มีข้อมูล — ยังไม่ได้เปิดตัวเชื่อมเครื่องพิมพ์บนคอม'
+      : 'ตัวเชื่อมเครื่องพิมพ์ไม่ได้เปิดอยู่ (ไม่มีสัญญาณ ' + Math.round(ageMs/1000) + ' วิ)' };
+  }
+  const matches = agents.flatMap(agent => (agent.printers || []).filter(p => p.ip === printer.ip));
+  if (!matches.length) return { cls: 'unknown', label: 'รอข้อมูลจากตัวเชื่อม...' };
+  const match = matches.find(p => p.ok) || matches[0];
   if (match.ok) return { cls: 'ok', label: 'เชื่อมต่อแล้ว' };
   return { cls: 'bad', label: 'เชื่อมต่อไม่ได้' + (match.error ? ' — ' + match.error : '') };
 }
@@ -1626,15 +1640,18 @@ async function pollPrinterStatus() {
   if (!PRINTERS.length) {
     banner.className = 'agent-banner';
     banner.textContent = 'ยังไม่ได้เพิ่มเครื่องพิมพ์ — เพิ่มเครื่องพิมพ์ด้านล่างก่อน';
-  } else if (!PRINTER_STATUS.updatedAt || (Date.now() - new Date(PRINTER_STATUS.updatedAt).getTime()) > 20000) {
+  } else if (!activePrinterAgents().length) {
     banner.className = 'agent-banner bad';
     banner.textContent = '⚠️ ยังไม่พบตัวเชื่อมเครื่องพิมพ์ทำงานอยู่ — เปิดโปรแกรม "เปิดระบบพิมพ์ครัว" บนคอมที่ต่อกับเครื่องพิมพ์ก่อน';
   } else {
-    const allOk = PRINTER_STATUS.printers.length && PRINTER_STATUS.printers.every(p => p.ok);
+    const agents = activePrinterAgents();
+    const allOk = PRINTERS.every(printer => agents.some(agent => (agent.printers || []).some(p => p.ip === printer.ip && p.ok)));
+    const labels = [...new Set(agents.map(agent => agent.hostname || agent.instanceId).filter(Boolean))];
     banner.className = 'agent-banner ' + (allOk ? 'ok' : 'bad');
-    banner.textContent = allOk
+    const message = allOk
       ? '✅ ตัวเชื่อมเครื่องพิมพ์ทำงานอยู่ เชื่อมต่อเครื่องพิมพ์ได้ครบทุกเครื่อง'
       : '⚠️ ตัวเชื่อมเครื่องพิมพ์ทำงานอยู่ แต่มีบางเครื่องเชื่อมต่อไม่ได้ (ดูจุดสีแดงด้านล่าง)';
+    banner.textContent = message + ' · พบ agent ' + agents.length + ' ตัว: ' + labels.join(', ');
   }
   renderPrinterList();
 }
@@ -1932,7 +1949,7 @@ loadSettings().then(() => {
 (function(){
 
 /* ---------------- Config ---------------- */
-const REFRESH_MS = 20000;
+const REFRESH_MS = 30000;
 
 /* ---------------- State (loaded from real API) ---------------- */
 let MENU = [];        // [{cat, items:[{id,name,price,category}]}]
@@ -1988,7 +2005,7 @@ async function loadMenu(){
 }
 
 async function loadTables(){
-  const res = await fetch('/api/table-status');
+  const res = await fetch('/api/table-status', { headers: { 'X-Jinko-Client': '2' } });
   const data = await res.json();
   TABLES = (data.tables || []).map(t=>({
     id: t.table,

@@ -1,4 +1,6 @@
 import net from 'net';
+import os from 'os';
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
@@ -12,6 +14,13 @@ const PRINTED_PATH = path.join(__dirname, 'printed.json');
 const TEST_MODE = process.argv.includes('--test');
 const HTTP_MAX_ATTEMPTS = 3;
 const HTTP_RETRY_DELAY_MS = 500;
+export const DEFAULT_ORDER_POLL_INTERVAL_MS = 6 * 1000;
+const DEFAULT_SETTINGS_REFRESH_MS = 5 * 60 * 1000;
+const DEFAULT_STATUS_HEARTBEAT_MS = 60 * 1000;
+
+export function orderPollIntervalMs(config = {}) {
+  return Number(config.pollIntervalMs) || DEFAULT_ORDER_POLL_INTERVAL_MS;
+}
 
 function retryableHttpStatus(status) {
   return status === 408 || status === 425 || status === 429 || status >= 500;
@@ -125,7 +134,7 @@ function savePrinted(set) {
 // website's "เครื่องพิมพ์ครัว" tab (stored via /api/settings) so the owner
 // never has to touch this file. Values in config.json are only used as a
 // fallback if that fetch fails (e.g. no internet at the moment).
-async function fetchRemoteSettings(apiBase) {
+export async function fetchRemoteSettings(apiBase) {
   const endpoint = apiBase.replace(/\/$/, '') + '/api/settings';
   const res = await fetchWithRetry(endpoint);
   if (!res.ok) throw new Error(`GET ${endpoint} -> HTTP ${res.status}`);
@@ -140,6 +149,45 @@ function mergeConfig(localConfig, remote) {
     if (remote.shopName) merged.shopName = remote.shopName;
   }
   return merged;
+}
+
+// Settings used to be fetched on every 6-second order poll. Keep a copy in
+// memory instead: it is refreshed at startup and then at a configurable
+// interval. A failed refresh deliberately leaves the last known-good values
+// in place, so an intermittent settings request can never stop order printing.
+export function createSettingsCache(localConfig, {
+  fetchSettings = fetchRemoteSettings,
+  now = () => Date.now(),
+  onError = () => {},
+} = {}) {
+  const refreshMs = Math.max(10 * 1000, Number(localConfig.settingsRefreshMs) || DEFAULT_SETTINGS_REFRESH_MS);
+  let remote = null;
+  let lastAttemptAt = 0;
+  let refreshing = null;
+
+  async function refresh({ force = false } = {}) {
+    const current = now();
+    if (!force && current - lastAttemptAt < refreshMs) return remote;
+    if (refreshing) return refreshing;
+    lastAttemptAt = current;
+    refreshing = (async () => {
+      try {
+        remote = await fetchSettings(localConfig.apiBase);
+      } catch (err) {
+        onError(err);
+      } finally {
+        refreshing = null;
+      }
+      return remote;
+    })();
+    return refreshing;
+  }
+
+  return {
+    refresh,
+    config: () => mergeConfig(localConfig, remote),
+    refreshMs,
+  };
 }
 
 // Split one order's items across the configured printers, based on each
@@ -219,30 +267,106 @@ function checkPrinterConnectivity(printer) {
 // the admin website so the "เครื่องพิมพ์ครัว" tab can show a live
 // connected/not-connected status. Never throws — a failed report just means
 // the admin page won't show freshness this cycle, it doesn't stop printing.
-const lastStatusLog = new Map();
-async function reportPrinterStatus(apiBase, printers) {
-  const results = await Promise.all(printers.map(checkPrinterConnectivity));
-  for (const r of results) {
-    const prev = lastStatusLog.get(r.ip);
-    if (prev !== r.ok) {
-      console.log(r.ok
-        ? `[printer] ✅ เชื่อมต่อ "${r.name}" (${r.ip}:${r.port}) ได้แล้ว`
-        : `[printer] ❌ เชื่อมต่อ "${r.name}" (${r.ip}:${r.port}) ไม่ได้ — ${r.error}`);
-      lastStatusLog.set(r.ip, r.ok);
-    }
-  }
-  try {
+function printerKey(printer) {
+  return String(printer.id || printer.ip);
+}
+
+function statusSignature(results) {
+  return JSON.stringify(results.map((result) => ({
+    id: result.id,
+    ok: result.ok,
+    error: result.error || null,
+    lastPrint: result.lastPrint || null,
+  })));
+}
+
+// Connectivity is still checked on the fast order loop, but the Redis-backed
+// status endpoint receives a POST only when something changed, after a print
+// result, or as a 60-second heartbeat. This keeps the admin useful without
+// consuming one Redis command per order poll.
+export function createPrinterStatusReporter({
+  apiBase,
+  instanceId = crypto.randomUUID(),
+  hostname = os.hostname(),
+  heartbeatMs = DEFAULT_STATUS_HEARTBEAT_MS,
+  probe = checkPrinterConnectivity,
+  post = async (payload) => {
     const endpoint = apiBase.replace(/\/$/, '') + '/api/printer-status';
     const response = await fetchWithRetry(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ printers: results }),
+      body: JSON.stringify(payload),
     });
     if (!response.ok) throw new Error(`POST ${endpoint} -> HTTP ${response.status}`);
-  } catch (err) {
-    console.warn('[warn] could not report printer status to the website (status just won\'t show as fresh there):', err.message);
+  },
+  now = () => Date.now(),
+  onError = () => {},
+} = {}) {
+  const lastPrint = new Map();
+  const lastStatusLog = new Map();
+  let lastReportedAt = 0;
+  let lastReportedSignature = null;
+  let reporting = null;
+  let reportPending = false;
+
+  function recordPrintResult(printer, ok, error = null) {
+    lastPrint.set(printerKey(printer), {
+      ok: Boolean(ok),
+      error: error || null,
+      at: new Date(now()).toISOString(),
+    });
   }
-  return results;
+
+  async function reportIfNeeded(printers, { force = false } = {}) {
+    if (reporting) {
+      // A print can finish while a connectivity report is in flight. Queue one
+      // follow-up pass so its success/failure is not delayed to the heartbeat.
+      reportPending = true;
+      return reporting;
+    }
+    reporting = (async () => {
+      const results = await Promise.all(printers.map(probe));
+      const enriched = results.map((result) => ({
+        ...result,
+        lastPrint: lastPrint.get(printerKey(result)) || null,
+      }));
+      for (const result of enriched) {
+        const previous = lastStatusLog.get(result.ip);
+        if (previous !== result.ok) {
+          console.log(result.ok
+            ? `[printer] ✅ เชื่อมต่อ "${result.name}" (${result.ip}:${result.port}) ได้แล้ว`
+            : `[printer] ❌ เชื่อมต่อ "${result.name}" (${result.ip}:${result.port}) ไม่ได้ — ${result.error}`);
+          lastStatusLog.set(result.ip, result.ok);
+        }
+      }
+
+      const signature = statusSignature(enriched);
+      const heartbeatDue = now() - lastReportedAt >= Math.max(10 * 1000, Number(heartbeatMs) || DEFAULT_STATUS_HEARTBEAT_MS);
+      if (!force && signature === lastReportedSignature && !heartbeatDue) return { reported: false, printers: enriched };
+
+      const payload = { instanceId, hostname, printers: enriched };
+      try {
+        await post(payload);
+        lastReportedAt = now();
+        lastReportedSignature = signature;
+        return { reported: true, printers: enriched };
+      } catch (err) {
+        onError(err);
+        return { reported: false, printers: enriched };
+      }
+    })();
+    try {
+      return await reporting;
+    } finally {
+      reporting = null;
+      if (reportPending) {
+        reportPending = false;
+        return reportIfNeeded(printers);
+      }
+    }
+  }
+
+  return { instanceId, hostname, recordPrintResult, reportIfNeeded };
 }
 
 function sendToPrinter(buffer, printer) {
@@ -285,7 +409,7 @@ async function printToStation(order, items, printer, config, showStationLabel) {
   console.log(`[print] โต๊ะ ${order.table} — order ${order.id} -> "${printer.name}" (${printer.ip}:${printer.port || 9100})`);
 }
 
-async function printOrder(order, config) {
+async function printOrder(order, config, onPrintResult = () => {}) {
   const printers = Array.isArray(config.printers) ? config.printers : [];
   if (!printers.length) {
     throw new Error('No printers configured. Add one in the admin website (แท็บ "เครื่องพิมพ์ครัว").');
@@ -300,22 +424,16 @@ async function printOrder(order, config) {
   for (const { printer, items } of routed) {
     try {
       await printToStation(order, items, printer, config, showStationLabel);
+      onPrintResult(printer, true);
     } catch (err) {
+      onPrintResult(printer, false, err.message);
       errors.push(`${printer.name} (${printer.ip}): ${err.message}`);
     }
   }
   if (errors.length) throw new Error(errors.join(' | '));
 }
 
-async function pollOnce(localConfig, printed) {
-  let config = localConfig;
-  try {
-    const remote = await fetchRemoteSettings(localConfig.apiBase);
-    config = mergeConfig(localConfig, remote);
-  } catch (err) {
-    console.warn('[warn] could not fetch printer settings from the website (using config.json values instead):', err.message);
-  }
-
+async function pollOnce(config, printed, statusReporter) {
   const printers = Array.isArray(config.printers) ? config.printers.filter((p) => p.ip) : [];
   if (!TEST_MODE && !printers.length) {
     throw new Error(
@@ -326,8 +444,8 @@ async function pollOnce(localConfig, printed) {
   config = { ...config, printers };
 
   if (!TEST_MODE && printers.length) {
-    // Fire-and-forget — don't let a status report delay/break order polling.
-    reportPrinterStatus(config.apiBase, printers).catch(() => {});
+    // Fire-and-forget — connectivity reports must not delay order retrieval.
+    statusReporter.reportIfNeeded(printers).catch(() => {});
   }
 
   const endpoint = config.apiBase.replace(/\/$/, '') + '/api/orders';
@@ -338,7 +456,12 @@ async function pollOnce(localConfig, printed) {
   const toPrint = orders.filter((o) => o.status !== 'done' && !printed.has(o.id));
   for (const order of toPrint) {
     try {
-      await printOrder(order, config);
+      await printOrder(order, config, (printer, ok, error) => {
+        statusReporter.recordPrintResult(printer, ok, error);
+        // A completed/failed ticket is important operational state: report it
+        // immediately rather than waiting for the next 60-second heartbeat.
+        statusReporter.reportIfNeeded(printers).catch(() => {});
+      });
       printed.add(order.id);
       savePrinted(printed);
     } catch (err) {
@@ -352,13 +475,24 @@ async function pollOnce(localConfig, printed) {
 async function main() {
   const localConfig = loadLocalConfig();
   const printed = loadPrinted();
+  const settingsCache = createSettingsCache(localConfig, {
+    onError: (err) => console.warn('[warn] could not refresh printer settings; using the last known settings:', err.message),
+  });
+  // Fetch once before the first order poll. Failure is safe: config() falls
+  // back to config.json and the agent continues to print.
+  await settingsCache.refresh({ force: true });
+  const statusReporter = createPrinterStatusReporter({
+    apiBase: localConfig.apiBase,
+    heartbeatMs: localConfig.printerStatusHeartbeatMs,
+    onError: (err) => console.warn('[warn] could not report printer status to the website:', err.message),
+  });
 
   console.log('== Kitchen print agent ==');
   console.log('API:', localConfig.apiBase);
   console.log(TEST_MODE
     ? 'Mode: TEST — tickets are saved as PNG files in ./test-output, nothing is sent to a printer.'
-    : 'Mode: LIVE — printer list / paper size are read from the admin website each cycle.');
-  console.log('Polling every', localConfig.pollIntervalMs || 4000, 'ms. Press Ctrl+C to stop.\n');
+    : `Mode: LIVE — settings refresh every ${Math.round(settingsCache.refreshMs / 1000)}s; printer status heartbeat every ${Math.round((localConfig.printerStatusHeartbeatMs || DEFAULT_STATUS_HEARTBEAT_MS) / 1000)}s.`);
+  console.log('Polling every', orderPollIntervalMs(localConfig), 'ms. Press Ctrl+C to stop.\n');
 
   let pausedNotice = false;
   let specialOpenDate = null;
@@ -382,8 +516,11 @@ async function main() {
       return;
     }
     pausedNotice = false;
+    // Refresh in the background. The current cached configuration is used for
+    // this 6-second poll, so a slow settings endpoint never delays printing.
+    settingsCache.refresh().catch(() => {});
     try {
-      const n = await pollOnce(localConfig, printed);
+      const n = await pollOnce(settingsCache.config(), printed, statusReporter);
       if (n > 0) console.log(`— printed ${n} new order(s) —`);
     } catch (err) {
       console.error('[error] poll failed:', err.message);
@@ -391,7 +528,7 @@ async function main() {
   };
 
   await loop();
-  setInterval(loop, localConfig.pollIntervalMs || 4000);
+  setInterval(loop, orderPollIntervalMs(localConfig));
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
